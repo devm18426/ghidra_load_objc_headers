@@ -1,6 +1,6 @@
 import re
 import typing
-from argparse import ArgumentParser
+from argparse import ArgumentParser, RawTextHelpFormatter
 from pathlib import Path
 from typing import Optional
 
@@ -40,7 +40,7 @@ THISCALL = "__thiscall"
 
 def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
     if "^block" in type_name:
-        # TODO: Figure out blocks
+        # TODO: Figure out blocks:
         tqdm.write("- Block detected. Skipping")
         return None
 
@@ -203,8 +203,27 @@ def main(headers: Path):
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("headers_path", type=Path)
+    desc = r"""   ________    _     __                     
+  / ____/ /_  (_)___/ /________ _           
+ / / __/ __ \/ / __  / ___/ __ `/           
+/ /_/ / / / / / /_/ / /  / /_/ /            
+\____/_/_/_/_/\__,_/_/   \__,_/____         
+      / __ \/ /_    (_)     / ____/         
+     / / / / __ \  / /_____/ /              
+    / /_/ / /_/ / / /_____/ /___            
+    \____/_.___/_/ /      \____/ __         
+           / //___/_  ____ _____/ /__  _____
+          / /  / __ \/ __ `/ __  / _ \/ ___/
+         / /__/ /_/ / /_/ / /_/ /  __/ /    
+         \____|____/\__,_/\__,_/\___/_/     
+                                            """
+    parser = ArgumentParser(
+        description=desc,
+        formatter_class=RawTextHelpFormatter
+    )
+    # TODO: Support globs
+    # TODO: Quiet mode
+    parser.add_argument("headers_path", type=Path, help="Path to single header file or directory containing headers")
 
     args = parser.parse_args()
 
