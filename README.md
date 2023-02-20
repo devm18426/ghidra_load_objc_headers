@@ -48,3 +48,4 @@ options:
 * ObjC Blocks are not handled at all.
 * Complex field types (e.g. in-place struct definitions) are not handled.
 * Self-dependencies are not resolved. Run twice on the same folder for best results.
+* Protocol definitions are ignored.
