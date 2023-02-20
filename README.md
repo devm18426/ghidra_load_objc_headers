@@ -5,7 +5,7 @@ The Objective-C headers are "parsed" using RegEx and relevant data is inserted i
 
 Currently supports the following data:
 * Identified interfaces are defined as structs, with their fields set accordingly (names and types)
-* Method parameters (names and types) are set as well. Assumes and sets `__thiscall` convention.
+* Instance method parameters (names and types) are set as well. Sets `__thiscall` convention.
 
 The parsed data is inserted over a bridge implemented with [`ghidra-bridge`](https://github.com/justfoxing/ghidra_bridge) so it may be run in any Python 3 interpreter, however requires the Python 2 server be running within Ghidra.
 
