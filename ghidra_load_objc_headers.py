@@ -22,7 +22,7 @@ from ghidra.program.model.listing import Function, ParameterImpl, ReturnParamete
 TYPE_REGEX_TEMPLATE = r"(?P<{type}>.+?(\s+\*)?)(<(?P<{protocols}>.+?)>)?"
 
 INTERFACE_REGEX = re.compile(
-    r"@interface (?P<name>[a-zA-Z]+).+?\{(?P<data>.+?)\}",
+    r"@interface (?P<name>[a-zA-Z]+).+?\{(?P<data>.+?)\n\}",
     re.DOTALL
 )
 
@@ -193,6 +193,10 @@ def main(headers: Path):
         if match:
             class_name = match["name"]
             fields: str = match["data"].strip()
+
+            if "struct " in fields:
+                tqdm.write("- Detected inline struct definition. Skipping...")
+                continue
 
             fields: list = [field.strip().removesuffix(";") for field in fields.splitlines()][::-1]
 
