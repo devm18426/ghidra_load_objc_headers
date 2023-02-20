@@ -12,7 +12,7 @@ The parsed data is inserted over a bridge implemented with [`ghidra-bridge`](htt
 ## Usage
 
 * `pip install -r requirements.txt` or `pipenv install -r requirements.txt`
-* Headers may be generated using `classdump-dyld`, for example:
+* Headers may be generated using [`classdump-dyld`](https://github.com/limneos/classdump-dyld), for example:
   
   ```
   classdump-dyld -b -h -o output_directory binary_name
