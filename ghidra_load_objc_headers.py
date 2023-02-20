@@ -50,6 +50,9 @@ def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
         tqdm.write("- Block detected. Skipping")
         return None
 
+    # Remove protocols
+    type_name = re.match(TYPE_REGEX, type_name)["type"]
+
     pointer = False
     if type_name.endswith("*"):
         pointer = True
@@ -57,9 +60,6 @@ def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
         type_name = type_name.rstrip("* ")
 
     type_name = type_name.removeprefix("const ")
-
-    # Remove protocols
-    type_name = re.match(TYPE_REGEX, type_name)["type"]
 
     # TODO: https://github.com/justfoxing/jfx_bridge/issues/19
     def findDataTypes(program, type_str):
