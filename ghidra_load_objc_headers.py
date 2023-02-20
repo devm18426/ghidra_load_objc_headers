@@ -25,11 +25,17 @@ INTERFACE_REGEX = re.compile(
     r"@interface (?P<name>[a-zA-Z]+).+\{(?P<data>.+)\}",
     re.DOTALL
 )
+
+# '(?P<type>.+?(\\s+\\*)?)(<(?P<protocols>.+?)>)?$'
 TYPE_REGEX = re.compile(TYPE_REGEX_TEMPLATE.format(type="type", protocols="protocols") + "$", re.MULTILINE)
+
+# '-\\((?P<rtype>.+?(\\s+\\*)?)(<(?P<rprotocols>.+?)>)?\\)(?P<name>\\S+?)(;|(:\\((?P<arg1_type>.+?(\\s+\\*)?)(<(?P<arg1_protocols>.+?)>)?\\)arg1\\s+?((?P<args>.+?)\\s?)?);)'
 METHOD_REGEX = re.compile(
     f"-\\({TYPE_REGEX_TEMPLATE.format(type='rtype', protocols='rprotocols')}\\)(?P<name>\\S+?)(;|(:\\({TYPE_REGEX_TEMPLATE.format(type='arg1_type', protocols='arg1_protocols')}\\)arg1\\s+?((?P<args>.+?)\\s?)?);)",
     re.MULTILINE
 )
+
+# '(?P<name>\\S+):\\((?P<type>.+?(\\s+\\*)?)(<(?P<protocols>.+?)>)?\\)arg[0-9]+'
 ARGS_REGEX = re.compile(
     f"(?P<name>\\S+):\\({TYPE_REGEX_TEMPLATE.format(type='type', protocols='protocols')}\\)arg[0-9]+",
     re.DOTALL
@@ -180,7 +186,7 @@ def main(headers: Path):
         with header_f.open("r") as f:
             header = f.read()
 
-        match = re.search(r"@interface (?P<name>[a-zA-Z]+).+?\{(?P<data>.+?)\}", header, flags=re.DOTALL)
+        match = re.search(INTERFACE_REGEX, header, flags=re.DOTALL)
 
         if match:
             class_name = match["name"]
