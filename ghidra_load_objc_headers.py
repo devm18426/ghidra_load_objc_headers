@@ -203,7 +203,7 @@ def main(headers: Path):
 
 
 if __name__ == "__main__":
-    desc = r"""   ________    _     __                     
+    banner = r"""   ________    _     __                     
   / ____/ /_  (_)___/ /________ _           
  / / __/ __ \/ / __  / ___/ __ `/           
 / /_/ / / / / / /_/ / /  / /_/ /            
@@ -217,8 +217,9 @@ if __name__ == "__main__":
          / /__/ /_/ / /_/ / /_/ /  __/ /    
          \____|____/\__,_/\__,_/\___/_/     
                                             """
+    print(banner)
     parser = ArgumentParser(
-        description=desc,
+        description="Load Objective-C header data into Ghidra",
         formatter_class=RawTextHelpFormatter
     )
     # TODO: Support globs
