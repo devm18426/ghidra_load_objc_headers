@@ -5,7 +5,7 @@ The Objective-C headers are "parsed" using RegEx and relevant data is inserted i
 
 Currently supports the following data:
 * Identified interfaces are defined as structs, with their fields set accordingly (names and types)
-* Instance method parameters (names and types) are set as well. Sets `__thiscall` convention.
+* Instance method parameters (names and types) are set as well. `__thiscall` convention will be set.
 
 When unknown types are encountered for the first time they are inserted into the Ghidra DB as an empty struct.
 
@@ -53,4 +53,4 @@ options:
 ## Known Issues
 * Complex field types (e.g. in-place struct definitions) are not handled.
 * Self-dependencies are not resolved. Run twice on the same folder for best results.
-* Protocol definitions are ignored.
+* Protocol definitions in data type literals are ignored (e.g. `NSObject<NSCoding, UITableViewDelegate>` will resolve simply to `NSObject`).
