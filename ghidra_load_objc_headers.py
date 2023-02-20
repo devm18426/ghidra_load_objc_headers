@@ -73,6 +73,7 @@ def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
         type_name = "Block_literal *"
 
     # Remove protocols
+    # TODO: Consider adding an option that preserves protocols
     type_name = re.match(TYPE_REGEX, type_name)["type"]
 
     pointer = False

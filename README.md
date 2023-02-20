@@ -54,3 +54,4 @@ options:
 * Complex field types (e.g. in-place struct definitions) are not handled.
 * Self-dependencies are not resolved. Run twice on the same folder for best results.
 * Protocol definitions in data type literals are ignored (e.g. `NSObject<NSCoding, UITableViewDelegate>` will resolve simply to `NSObject`).
+* Properties are ignored.
