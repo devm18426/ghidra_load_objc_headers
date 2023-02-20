@@ -7,6 +7,10 @@ Currently supports the following data:
 * Identified interfaces are defined as structs, with their fields set accordingly (names and types)
 * Instance method parameters (names and types) are set as well. Sets `__thiscall` convention.
 
+When unknown types are encountered for the first time they are inserted into the Ghidra DB as an empty struct.
+
+When pointers to unknown types are encountered they are inserted as `void *` with comments documenting their original type.
+
 The parsed data is inserted over a bridge implemented with [`ghidra-bridge`](https://github.com/justfoxing/ghidra_bridge) so it may be run in any Python 3 interpreter, however requires the Python 2 server be running within Ghidra.
 
 ## Usage
