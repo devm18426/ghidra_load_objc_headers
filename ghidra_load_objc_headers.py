@@ -201,13 +201,13 @@ def main(headers: Path):
             fields: list = [field.strip().removesuffix(";") for field in fields.splitlines()][::-1]
 
             if (struct := dt_man.getDataType(f"/{class_name}")) is None:
-                tqdm.write(f"Creating struct {class_name}")
+                tqdm.write(f"- Creating struct {class_name}")
                 struct = StructureDataType(class_name, 0)
 
             load_struct_fields(struct, fields)
 
         else:
-            tqdm.write(f"Struct {header_f.stem} not found in header file")
+            tqdm.write(f"- Struct {header_f.stem} not found in header file")
 
         matches = re.finditer(METHOD_REGEX, header)
 
