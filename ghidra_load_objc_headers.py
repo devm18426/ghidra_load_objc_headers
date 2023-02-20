@@ -22,7 +22,7 @@ from ghidra.program.model.listing import Function, ParameterImpl, ReturnParamete
 TYPE_REGEX_TEMPLATE = r"(?P<{type}>.+?(\s+\*)?)(<(?P<{protocols}>.+?)>)?"
 
 INTERFACE_REGEX = re.compile(
-    r"@interface (?P<name>[a-zA-Z]+).+\{(?P<data>.+)\}",
+    r"@interface (?P<name>[a-zA-Z]+).+?\{(?P<data>.+?)\}",
     re.DOTALL
 )
 
@@ -78,7 +78,7 @@ def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
         return resolve_data_type("unsigned int", field_name)
 
     if data_type is None:
-        tqdm.write(f"Unknown data type {type_name}" +
+        tqdm.write(f"- Unknown data type {type_name}" +
                    (" *" if pointer else "") +
                    (f" (field {field_name})" if field_name is not None else ""))
 
@@ -117,11 +117,11 @@ def load_struct_fields(struct, fields):
 
 
 def update_method(class_name, methods):
-    tqdm.write(f"Getting class symbol {class_name}")
+    tqdm.write(f"- Getting class symbol {class_name}")
 
     namespace = sym_table.getNamespace(class_name, None)
     if namespace is None:
-        tqdm.write(f"Couldn't find class symbol {class_name}")
+        tqdm.write(f"- Couldn't find class symbol {class_name}")
         return
 
     symbols = getCurrentProgram().getSymbolTable().getSymbols(namespace)
@@ -171,7 +171,7 @@ def update_method(class_name, methods):
             )
 
         else:
-            tqdm.write(f"Skipping unknown symbol {name}")
+            tqdm.write(f"- Skipping unknown symbol {name}")
 
     end(True)
 
@@ -186,7 +186,9 @@ def main(headers: Path):
         with header_f.open("r") as f:
             header = f.read()
 
-        match = re.search(INTERFACE_REGEX, header, flags=re.DOTALL)
+        tqdm.write(header_f.name)
+
+        match = re.search(INTERFACE_REGEX, header)
 
         if match:
             class_name = match["name"]

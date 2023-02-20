@@ -46,3 +46,4 @@ options:
   
 ## Known Issues
 * ObjC Blocks are not handled at all.
+* Complex field types (e.g. in-place struct definitions) are not handled.
