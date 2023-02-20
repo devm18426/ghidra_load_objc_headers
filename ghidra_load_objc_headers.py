@@ -46,9 +46,31 @@ THISCALL = "__thiscall"
 
 def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
     if "^block" in type_name:
-        # TODO: Figure out blocks:
-        tqdm.write("- Block detected. Skipping")
-        return None
+        # TODO: Consider implementing full Block_literal struct
+        # https://www.cocoawithlove.com/2009/10/how-blocks-are-implemented-and.html
+        # struct Block_literal {
+        #     void *isa;
+        #
+        #     int flags;
+        #     int reserved; // is actually the retain count of heap allocated blocks
+        #
+        #     void (*invoke)(void *, ...); // a pointer to the block's compiled code
+        #
+        #     struct Block_descriptor {
+        #         unsigned long int reserved; // always nil
+        #         unsigned long int size; // size of the entire Block_literal
+        #
+        #         // functions used to copy and dispose of the block (if needed)
+        #         void (*copy_helper)(void *dst, void *src);
+        #         void (*dispose_helper)(void *src);
+        #     } *descriptor;
+        #
+        #     // Here the struct contains one entry for every surrounding scope variable.
+        #     // For non-pointers, these entries are the actual const values of the variables.
+        #     // For pointers, there are a range of possibilities (__block pointer,
+        #     // object pointer, weak pointer, ordinary pointer)
+        # };
+        type_name = "Block_literal *"
 
     # Remove protocols
     type_name = re.match(TYPE_REGEX, type_name)["type"]
@@ -207,7 +229,7 @@ def main(headers: Path):
             load_struct_fields(struct, fields)
 
         else:
-            tqdm.write(f"- Struct {header_f.stem} not found in header file")
+            tqdm.write(f"- Interface {header_f.stem} not found in header file. Fields won't be loaded")
 
         matches = re.finditer(METHOD_REGEX, header)
 

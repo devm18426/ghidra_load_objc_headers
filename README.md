@@ -11,6 +11,8 @@ When unknown types are encountered for the first time they are inserted into the
 
 When pointers to unknown types are encountered they are inserted as `void *` with comments documenting their original type.
 
+When [Blocks](https://www.cocoawithlove.com/2009/10/how-blocks-are-implemented-and.html) are encountered they are inserted with type `Block_literal *`, where `Block_literal` is an empty struct.
+
 The parsed data is inserted over a bridge implemented with [`ghidra-bridge`](https://github.com/justfoxing/ghidra_bridge) so it may be run in any Python 3 interpreter, however requires the Python 2 server be running within Ghidra.
 
 ## Usage
@@ -49,7 +51,6 @@ options:
   ```
   
 ## Known Issues
-* ObjC Blocks are not handled at all.
 * Complex field types (e.g. in-place struct definitions) are not handled.
 * Self-dependencies are not resolved. Run twice on the same folder for best results.
 * Protocol definitions are ignored.
