@@ -44,6 +44,13 @@ ARGS_REGEX = re.compile(
 THISCALL = "__thiscall"
 
 
+# TODO: https://github.com/justfoxing/jfx_bridge/issues/19
+def findDataTypes(type_str):
+    candidates = []
+    currentProgram.getDataTypeManager().findDataTypes(type_str, candidates)
+    return candidates
+
+
 def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
     if "^block" in type_name:
         # TODO: Consider implementing full Block_literal struct
@@ -84,14 +91,7 @@ def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
 
     type_name = type_name.removeprefix("const ")
 
-    # TODO: https://github.com/justfoxing/jfx_bridge/issues/19
-    def findDataTypes(program, type_str):
-        candidates = []
-        program.getDataTypeManager().findDataTypes(type_str, candidates)
-        return candidates
-
-    remote_findDataTypes = b.remoteify(findDataTypes)
-    candidates = remote_findDataTypes(prog, type_name)
+    candidates = findDataTypes(type_name)
 
     data_type = None
     if len(candidates) > 0:
@@ -283,5 +283,7 @@ if __name__ == "__main__":
     dt_man = prog.getDataTypeManager()
     func_man = prog.getFunctionManager()
     func_tag_man = func_man.getFunctionTagManager()
+
+    findDataTypes = b.remoteify(findDataTypes)
 
     main(**args.__dict__)
