@@ -128,7 +128,12 @@ def load_struct_fields(struct, fields):
     struct.deleteAll()
 
     for field in tqdm(fields, unit="field", desc="Loading structs", leave=False):
-        type_name, field_name = field.rsplit(maxsplit=1)
+        split = field.rsplit(maxsplit=1)
+        if len(split) != 2:
+            tqdm.write(f" - Encountered field with no type specified ({split}). Skipping")
+            continue
+
+        type_name, field_name = split
 
         data_type = resolve_data_type(type_name, field_name)
         if data_type is None:
