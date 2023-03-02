@@ -204,11 +204,11 @@ def update_method(class_name, methods):
     end(True)
 
 
-def main(headers: Path):
-    if headers.is_dir():
-        iterator = tqdm(list(headers.iterdir()), unit="header", leave=False, desc="Processing headers")
+def main(headers_path: Path, pack: bool):
+    if headers_path.is_dir():
+        iterator = tqdm(list(headers_path.iterdir()), unit="header", leave=False, desc="Processing headers")
     else:
-        iterator = [headers]
+        iterator = [headers_path]
 
     for header_f in iterator:
         with header_f.open("r") as f:
@@ -231,6 +231,9 @@ def main(headers: Path):
             if (struct := dt_man.getDataType(f"/{class_name}")) is None:
                 tqdm.write(f"- Creating struct {class_name}")
                 struct = StructureDataType(class_name, 0)
+
+            if pack:
+                struct.setToDefaultPacking()
 
             load_struct_fields(struct, fields)
 
@@ -265,6 +268,13 @@ if __name__ == "__main__":
     # TODO: Support globs
     # TODO: Quiet mode
     parser.add_argument("headers_path", type=Path, help="Path to single header file or directory containing headers")
+    parser.add_argument(
+        "--disable-packing",
+        dest="pack",
+        action="store_false",
+        default="True",
+        help="Disable struct packing (Default: Enabled)",
+    )
 
     args = parser.parse_args()
 
@@ -274,4 +284,4 @@ if __name__ == "__main__":
     func_man = prog.getFunctionManager()
     func_tag_man = func_man.getFunctionTagManager()
 
-    main(args.headers_path)
+    main(**args.__dict__)
