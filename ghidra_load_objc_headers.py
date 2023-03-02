@@ -13,7 +13,7 @@ else:
 
     b = ghidra_bridge.GhidraBridge(namespace=globals(), hook_import=True)
 
-from ghidra.program.model.data import StructureDataType, DataType
+from ghidra.program.model.data import StructureDataType, DataType, CategoryPath, DataTypeConflictHandler
 from ghidra.program.model.symbol import SymbolType, SourceType
 from ghidra.program.model.listing import Function, ParameterImpl, ReturnParameterImpl
 
@@ -119,11 +119,10 @@ def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
     return data_type
 
 
-def load_struct_fields(struct, fields):
+def load_struct_fields(struct, category, fields):
     start()
 
-    if dt_man.findDataTypeForID(struct.getUniversalID()) is None:
-        dt_man.addDataType(struct, None)
+    category.addDataType(struct, DataTypeConflictHandler.KEEP_HANDLER)
 
     struct.deleteAll()
 
@@ -228,14 +227,20 @@ def main(headers_path: Path, pack: bool):
 
             fields: list = [field.strip().removesuffix(";") for field in fields.splitlines()][::-1]
 
-            if (struct := dt_man.getDataType(f"/{class_name}")) is None:
+            start()
+            category = dt_man.createCategory(CategoryPath(f"/{header_f.name}"))
+            end(True)
+
+            struct = category.getDataType(class_name)
+
+            if struct is None:
                 tqdm.write(f"- Creating struct {class_name}")
                 struct = StructureDataType(class_name, 0)
 
             if pack:
                 struct.setToDefaultPacking()
 
-            load_struct_fields(struct, fields)
+            load_struct_fields(struct, category, fields)
 
         else:
             tqdm.write(f"- Interface {header_f.stem} not found in header file. Fields won't be loaded")
