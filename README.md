@@ -48,6 +48,7 @@ positional arguments:
 
 options:
   -h, --help    show this help message and exit
+  --disable-packing  Disable struct packing (Default: Enabled)
   ```
   
 ## Known Issues
