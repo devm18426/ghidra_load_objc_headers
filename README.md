@@ -39,7 +39,7 @@ The parsed data is inserted over a bridge implemented with [`ghidra-bridge`](htt
          / /__/ /_/ / /_/ / /_/ /  __/ /
          \____|____/\__,_/\__,_/\___/_/
 
-usage: ghidra_load_objc_headers.py [-h] headers_path
+usage: ghidra_load_objc_headers.py [-h] [--disable-packing] headers_path
 
 Load Objective-C header data into Ghidra
 
