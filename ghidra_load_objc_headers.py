@@ -1,4 +1,5 @@
 import logging
+import sys
 import typing
 from argparse import ArgumentParser, RawTextHelpFormatter
 from logging import DEBUG
@@ -227,8 +228,15 @@ if __name__ == "__main__":
 
     args = parser.parse_args().__dict__
 
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
     if args.pop("verbose"):
         logger.setLevel(DEBUG)
+        handler.setFormatter(logging.Formatter("[%(levelname)-5s] %(message)s"))
+
+    logger.addHandler(handler)
+    logger.propagate = False
 
     prog = getCurrentProgram()
     sym_table = prog.getSymbolTable()
@@ -236,5 +244,5 @@ if __name__ == "__main__":
     func_man = prog.getFunctionManager()
     func_tag_man = func_man.getFunctionTagManager()
 
-    with logging_redirect_tqdm():
+    with logging_redirect_tqdm(loggers=[logger]):
         main(**args)
