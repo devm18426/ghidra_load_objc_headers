@@ -74,6 +74,14 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
 
             field_type = category.getDataType(type_name)
 
+            if var_name == "":
+                logger.error(f"- Missing pointer variable name (possible libclang issue). Returning placeholder")
+                logger.error(
+                    f"- {var_cursor.location.file.name}:{var_cursor.location.line}:{var_cursor.location.column}"
+                )
+
+                var_name = f"MISSING_PTR_NAME_{var_cursor.hash}"
+
         case TypeKind.CHAR_S:
             field_type = CharDataType()
 
