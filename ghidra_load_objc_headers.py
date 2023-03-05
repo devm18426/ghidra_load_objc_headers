@@ -2,6 +2,7 @@ import logging
 import sys
 import typing
 from argparse import ArgumentParser, RawTextHelpFormatter
+from collections import OrderedDict
 from logging import DEBUG
 from pathlib import Path
 
@@ -38,7 +39,7 @@ class GhidraTransaction:
             end(True)
 
 
-STRUCTS = {}
+STRUCTS: dict[str, dict] = {}
 
 
 def find_data_types(type_str):
@@ -62,7 +63,7 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
     # var_name = field_cursor.displayname
 
     type_name: str = var_cursor.type.spelling
-    field_type: DataType | None = None
+    variable_type: DataType | None = None
     pointer = False
 
     match typing.cast(Type, var_cursor.type).kind:
@@ -73,7 +74,7 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
             type_name = typing.cast(Cursor, next(var_cursor.get_children())).displayname
             logger.debug(f"- Pointer to {type_name}")
 
-            field_type = category.getDataType(type_name)
+            variable_type = category.getDataType(type_name)
 
             if var_name == "":
                 logger.error(f"- Missing pointer variable name (possible libclang issue). Returning placeholder")
@@ -83,8 +84,11 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
 
                 var_name = f"MISSING_PTR_NAME_{var_cursor.hash}"
 
+            if variable_type is None:
+                logger.debug(f"- Creating empty struct {type_name}")
+
         case TypeKind.CHAR_S:
-            field_type = CharDataType()
+            variable_type = CharDataType()
 
         case other:
             # https://nshipster.com/type-encodings/
@@ -97,15 +101,25 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
                 type_candidates = find_data_types(other.name.lower())
 
             if len(type_candidates) == 1:
-                field_type = type_candidates[0]
+                variable_type = type_candidates[0]
             else:
-                logger.debug(f"- TODO: Support field kind {other}")
+                logger.debug(f"- TODO: Support variable kind {other}")
                 logger.debug(f"- Got {len(type_candidates)} type candidates for type name {var_cursor.type.spelling}")
 
-    return type_name, field_type, pointer, var_name
+    return type_name, variable_type, pointer, var_name
 
 
 def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_methods=False):
+    struct = STRUCTS.setdefault(cursor.displayname, {})
+    variables = struct.setdefault("vars", OrderedDict())
+    methods = struct.setdefault("methods", [])
+    dependencies = struct.setdefault("deps", {})
+
+    with GhidraTransaction():
+        data_type = StructureDataType(category.getCategoryPath(), cursor.displayname, 0)
+        logger.debug(f"- Pushing {cursor.displayname} to {category}")
+        category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
+
     instance_var_cursor: Cursor
     for instance_var_cursor in cursor.get_children():
         match instance_var_cursor.kind:
@@ -114,12 +128,21 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
                     logger.debug(f"Skipping var {instance_var_cursor.displayname}")
                     continue
 
-                type_name, field_type, pointer, field_name = parse_instance_variable(instance_var_cursor, category)
+                type_name, variable_type, pointer, variable_name =\
+                    parse_instance_variable(instance_var_cursor, category)
 
-                logger.debug(f"{instance_var_cursor.objc_type_encoding} - {field_name}")
+                logger.debug(f"{instance_var_cursor.objc_type_encoding} - {variable_name}")
 
-                if field_type is None:
+                if variable_type is None:
                     logger.debug(f"- Need to resolve {type_name} ({pointer=})")
+                    dependency = dependencies.setdefault(type_name, [])
+                    dependency.append(variable_name)
+
+                variables[variable_name] = {
+                    "type_name": type_name,
+                    "type": variable_type,
+                    "pointer": pointer,
+                }
 
             case CursorKind.OBJC_INSTANCE_METHOD_DECL:
                 if skip_methods:
@@ -142,6 +165,47 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
                 logger.debug(f"TODO: Implement {instance_var_cursor.kind} {instance_var_cursor.displayname}")
             case other:
                 logger.warning(f"Unsupported cursor kind {other}")
+
+
+def push_structs():
+    logger.info(f"Pushing {len(STRUCTS)} structs")
+    logger.debug(f"{STRUCTS=}")
+
+    with GhidraTransaction():
+        # Unknown types should go in an "uncategorized" category
+        category_path = CategoryPath(f"/MISSING_TYPES")
+        logger.debug(f"Getting/creating category path {category_path}")
+        uncategorized_category = dt_man.createCategory(category_path)
+
+        # Resolve dependencies
+        for type_name, struct in tqdm(STRUCTS.items(), leave=False):
+            for dep, variables in tqdm(struct.get("deps").items(), leave=False):
+                type_candidates = find_data_types(dep)
+
+                if (candidates := len(type_candidates)) == 0:
+                    logger.debug(f"- Creating empty uncategorized struct {dep}")
+
+                    data_type = StructureDataType(dep, 0)
+                    uncategorized_category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
+
+                elif candidates == 1:
+                    data_type = type_candidates[0]
+
+                elif candidates != 1:
+                    logger.debug(f"- Got {candidates} type candidates for dependency type name {dep}")
+                    continue
+
+                for variable in variables:
+                    struct["vars"][variable]["type"] = data_type
+
+        # Populate structs
+        for type_name, struct in tqdm(STRUCTS.items(), leave=False):
+            for variable_name, var in tqdm(OrderedDict(reversed(list(struct["vars"].items()))).items(), leave=False):
+                if var["pointer"]:
+                    pointer = dt_man.getPointer(var["type"])
+                    data_type.insertAtOffset(0, pointer, pointer.length, variable_name, "")
+                else:
+                    data_type.insertAtOffset(0, var["type"], var["type"].length, variable_name, "")
 
 
 def main(headers_path: Path, pack: bool, skip_fields, skip_methods):
@@ -175,6 +239,8 @@ def main(headers_path: Path, pack: bool, skip_fields, skip_methods):
                     type_name = child.displayname
                     logger.info(f"Parsing {type_name}")
                     parse_interface(child, category, skip_fields, skip_methods)
+
+    push_structs()
 
 
 if __name__ == "__main__":
