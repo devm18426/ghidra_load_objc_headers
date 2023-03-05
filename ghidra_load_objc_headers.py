@@ -1,10 +1,12 @@
-import re
+import logging
 import typing
 from argparse import ArgumentParser, RawTextHelpFormatter
+from logging import DEBUG
 from pathlib import Path
-from typing import Optional
 
+from clang.cindex import Index, Cursor, CursorKind, TypeKind, Type, TranslationUnitLoadError
 from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 if typing.TYPE_CHECKING:
     from ghidra.ghidra_builtins import *
@@ -13,241 +15,157 @@ else:
 
     b = ghidra_bridge.GhidraBridge(namespace=globals(), hook_import=True)
 
-from ghidra.program.model.data import StructureDataType, DataType, CategoryPath, DataTypeConflictHandler
+from ghidra.program.model.data import StructureDataType, DataType, CategoryPath, DataTypeConflictHandler, Category, \
+    CharDataType
 from ghidra.program.model.symbol import SymbolType, SourceType
 from ghidra.program.model.listing import Function, ParameterImpl, ReturnParameterImpl
 
-# TODO: Consider using libclang AST instead of regexes...
-# https://libclang.readthedocs.io/en/latest/
-TYPE_REGEX_TEMPLATE = r"(?P<{type}>.+?(\s+\*)?)(<(?P<{protocols}>.+?)>)?"
-
-INTERFACE_REGEX = re.compile(
-    r"@interface (?P<name>[a-zA-Z]+).+?\{(?P<data>.+?)\n\}",
-    re.DOTALL
-)
-
-# '(?P<type>.+?(\\s+\\*)?)(<(?P<protocols>.+?)>)?$'
-TYPE_REGEX = re.compile(TYPE_REGEX_TEMPLATE.format(type="type", protocols="protocols") + "$", re.MULTILINE)
-
-# '-\\((?P<rtype>.+?(\\s+\\*)?)(<(?P<rprotocols>.+?)>)?\\)(?P<name>\\S+?)(;|(:\\((?P<arg1_type>.+?(\\s+\\*)?)(<(?P<arg1_protocols>.+?)>)?\\)arg1\\s+?((?P<args>.+?)\\s?)?);)'
-METHOD_REGEX = re.compile(
-    f"-\\({TYPE_REGEX_TEMPLATE.format(type='rtype', protocols='rprotocols')}\\)(?P<name>\\S+?)(;|(:\\({TYPE_REGEX_TEMPLATE.format(type='arg1_type', protocols='arg1_protocols')}\\)arg1\\s+?((?P<args>.+?)\\s?)?);)",
-    re.MULTILINE
-)
-
-# '(?P<name>\\S+):\\((?P<type>.+?(\\s+\\*)?)(<(?P<protocols>.+?)>)?\\)arg[0-9]+'
-ARGS_REGEX = re.compile(
-    f"(?P<name>\\S+):\\({TYPE_REGEX_TEMPLATE.format(type='type', protocols='protocols')}\\)arg[0-9]+",
-    re.DOTALL
-)
-
 THISCALL = "__thiscall"
 
+logger = logging.getLogger(__name__)
 
-# TODO: https://github.com/justfoxing/jfx_bridge/issues/19
-def findDataTypes(type_str):
+
+class GhidraTransaction:
+    def __enter__(self):
+        start()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            logging.debug(f"Caught {exc_type} during transaction. Aborting. ({exc_val})")
+            end(False)
+        else:
+            end(True)
+
+
+STRUCTS = {}
+
+
+def find_data_types(type_str):
     candidates = []
     currentProgram.getDataTypeManager().findDataTypes(type_str, candidates)
     return candidates
 
 
-def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
-    if "^block" in type_name:
-        # TODO: Consider implementing full Block_literal struct
-        # https://www.cocoawithlove.com/2009/10/how-blocks-are-implemented-and.html
-        # struct Block_literal {
-        #     void *isa;
-        #
-        #     int flags;
-        #     int reserved; // is actually the retain count of heap allocated blocks
-        #
-        #     void (*invoke)(void *, ...); // a pointer to the block's compiled code
-        #
-        #     struct Block_descriptor {
-        #         unsigned long int reserved; // always nil
-        #         unsigned long int size; // size of the entire Block_literal
-        #
-        #         // functions used to copy and dispose of the block (if needed)
-        #         void (*copy_helper)(void *dst, void *src);
-        #         void (*dispose_helper)(void *src);
-        #     } *descriptor;
-        #
-        #     // Here the struct contains one entry for every surrounding scope variable.
-        #     // For non-pointers, these entries are the actual const values of the variables.
-        #     // For pointers, there are a range of possibilities (__block pointer,
-        #     // object pointer, weak pointer, ordinary pointer)
-        # };
-        type_name = "Block_literal *"
+find_data_types = b.remoteify(find_data_types)
 
-    # Remove protocols
-    # TODO: Consider adding an option that preserves protocols
-    type_name = re.match(TYPE_REGEX, type_name)["type"]
 
+def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str, typing.Optional[DataType], bool, str]:
+    var_name = var_cursor.displayname
+
+    # children = list(field_cursor.get_children())
+    # if len(children) != 1:
+    #     logger.debug(f"TODO: Handle field declarations with {len(children)} children")
+    #     return
+    #
+    # field_cursor: Cursor = next(children)
+    # var_name = field_cursor.displayname
+
+    type_name: str = var_cursor.type.spelling
+    field_type: DataType | None = None
     pointer = False
-    if type_name.endswith("*"):
-        pointer = True
 
-        type_name = type_name.rstrip("* ")
+    match typing.cast(Type, var_cursor.type).kind:
+        case TypeKind.OBJCOBJECTPOINTER:
+            pointer = True
 
-    type_name = type_name.removeprefix("const ")
+            # Unpointered name
+            type_name = typing.cast(Cursor, next(var_cursor.get_children())).displayname
+            logger.debug(f"- Pointer to {type_name}")
 
-    candidates = findDataTypes(type_name)
+            field_type = category.getDataType(type_name)
 
-    data_type = None
-    if len(candidates) > 0:
-        data_type = candidates[0]
+        case TypeKind.CHAR_S:
+            field_type = CharDataType()
 
-    if data_type is None and type_name == "unsigned":
-        return resolve_data_type("unsigned int", field_name)
+        case other:
+            # https://nshipster.com/type-encodings/
 
-    if data_type is None:
-        tqdm.write(f"- Unknown data type {type_name}" +
-                   (" *" if pointer else "") +
-                   (f" (field {field_name})" if field_name is not None else ""))
+            if var_cursor.objc_type_encoding == "@":
+                # Type is an object (or pointer to)
+                type_candidates = find_data_types(type_name)
+            else:
+                # Type is primitive
+                type_candidates = find_data_types(other.name.lower())
 
-        if pointer:
-            tqdm.write("- Pointer detected. Creating empty struct")
-            data_type = StructureDataType(type_name, 0)
-            dt_man.addDataType(data_type, None)
+            if len(type_candidates) == 1:
+                field_type = type_candidates[0]
+            else:
+                logger.debug(f"- TODO: Support field kind {other}")
+                logger.debug(f"- Got {len(type_candidates)} type candidates for type name {var_cursor.type.spelling}")
 
-        else:
-            tqdm.write("- Skipping. This will probably ruin your struct")
-
-    if data_type and pointer:
-        data_type = dt_man.getPointer(data_type)
-
-    return data_type
+    return type_name, field_type, pointer, var_name
 
 
-def load_struct_fields(struct, category, fields):
-    start()
+def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_methods=False):
+    instance_var_cursor: Cursor
+    for instance_var_cursor in cursor.get_children():
+        match instance_var_cursor.kind:
+            case CursorKind.OBJC_IVAR_DECL:
+                if skip_fields:
+                    logger.debug(f"Skipping var {instance_var_cursor.displayname}")
+                    continue
 
-    category.addDataType(struct, DataTypeConflictHandler.KEEP_HANDLER)
+                type_name, field_type, pointer, field_name = parse_instance_variable(instance_var_cursor, category)
 
-    struct.deleteAll()
+                logger.debug(f"{instance_var_cursor.objc_type_encoding} - {field_name}")
 
-    for field in tqdm(fields, unit="field", desc="Loading structs", leave=False):
-        split = field.rsplit(maxsplit=1)
-        if len(split) != 2:
-            tqdm.write(f" - Encountered field with no type specified ({split}). Skipping")
-            continue
+                if field_type is None:
+                    logger.debug(f"- Need to resolve {type_name} ({pointer=})")
 
-        type_name, field_name = split
+            case CursorKind.OBJC_INSTANCE_METHOD_DECL:
+                if skip_methods:
+                    logger.debug(f"Skipping method {instance_var_cursor.displayname}")
+                    continue
 
-        data_type = resolve_data_type(type_name, field_name)
-        if data_type is None:
-            continue
+                logger.debug(f"{instance_var_cursor.kind} {instance_var_cursor.displayname}")
 
-        struct.insertAtOffset(0, data_type, data_type.length, field_name, None)
+            case CursorKind.OBJC_PROPERTY_DECL:
+                if skip_methods:
+                    logger.debug(f"Skipping property {instance_var_cursor.displayname}")
+                    continue
 
-    end(True)
-
-
-def update_method(class_name, methods):
-    tqdm.write(f"- Getting class symbol {class_name}")
-
-    namespace = sym_table.getNamespace(class_name, None)
-    if namespace is None:
-        tqdm.write(f"- Couldn't find class symbol {class_name}")
-        return
-
-    symbols = getCurrentProgram().getSymbolTable().getSymbols(namespace)
-    symbols = {
-        symbol.getName(): symbol
-        for symbol in filter(lambda symbol: symbol.getSymbolType() == SymbolType.FUNCTION, symbols)
-    }
-
-    start()
-    for method in tqdm(methods, unit="method", leave=False, desc="Updating methods"):
-        name = method["name"]
-        params = []
-
-        if method["arg1_type"]:
-            name += ":"
-
-        if method["args"]:
-            args = list(re.finditer(ARGS_REGEX, method["args"]))
-            name += ":".join([arg["name"] for arg in args]) + ":"
-
-            params = []
-            for arg in args:
-                arg_type = resolve_data_type(arg["type"])
-                param = ParameterImpl(
-                    arg["name"],
-                    arg_type,
-                    prog,
-                )
-
-                params.append(param)
-
-        if symbol := symbols.get(name):
-            func = func_man.getFunction(symbol.getID())
-
-            return_param = None
-            return_type = resolve_data_type(method["rtype"])
-            if return_type is not None:
-                return_param = ReturnParameterImpl(return_type, prog)
-
-            func.updateFunction(
-                THISCALL,
-                return_param,
-                params,
-                Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
-                False,
-                SourceType.USER_DEFINED,
-            )
-
-        else:
-            tqdm.write(f"- Skipping unknown symbol {name}")
-
-    end(True)
+                # @property (retain, nonatomic) NSString* name;
+                #
+                # Generates below code:
+                #
+                # -(NSString*)name;
+                # -(void)setName:(NSString*)userName;
+                logger.debug(f"TODO: Implement {instance_var_cursor.kind} {instance_var_cursor.displayname}")
+            case other:
+                logger.warning(f"Unsupported cursor kind {other}")
 
 
-def main(headers_path: Path, pack: bool):
+def main(headers_path: Path, pack: bool, skip_fields, skip_methods):
     if headers_path.is_dir():
         iterator = tqdm(list(headers_path.iterdir()), unit="header", leave=False, desc="Processing headers")
     else:
         iterator = [headers_path]
 
+    index = Index.create()
     for header_f in iterator:
-        with header_f.open("r") as f:
-            header = f.read()
+        try:
+            # https://github.com/llvm-mirror/clang/blob/release_60/include/clang/Driver/Types.def
+            translation_unit = index.parse(header_f, args=(
+                "-x", "objective-c-header",
+                # "-objcmt-migrate-all",
+            ))
+        except TranslationUnitLoadError:
+            logger.error(f"Couldn't parse file {header_f.name}. Skipping")
+            continue
 
-        tqdm.write(header_f.name)
+        with GhidraTransaction():
+            category_path = CategoryPath(f"/{header_f.name}")
+            logger.debug(f"Getting/creating category path {category_path}")
+            category = dt_man.createCategory(category_path)
 
-        match = re.search(INTERFACE_REGEX, header)
+        for child in translation_unit.cursor.get_children():
+            child: Cursor
 
-        if match:
-            class_name = match["name"]
-            fields: str = match["data"].strip()
-
-            if "struct " in fields:
-                tqdm.write("- Detected inline struct definition. Skipping...")
-                continue
-
-            fields: list = [field.strip().removesuffix(";") for field in fields.splitlines()][::-1]
-
-            start()
-            category = dt_man.createCategory(CategoryPath(f"/{header_f.name}"))
-            end(True)
-
-            struct = category.getDataType(class_name)
-
-            if struct is None:
-                tqdm.write(f"- Creating struct {class_name}")
-                struct = StructureDataType(class_name, 0)
-
-            if pack:
-                struct.setToDefaultPacking()
-
-            load_struct_fields(struct, category, fields)
-
-        else:
-            tqdm.write(f"- Interface {header_f.stem} not found in header file. Fields won't be loaded")
-
-        matches = re.finditer(METHOD_REGEX, header)
-
-        update_method(header_f.stem, list(matches))
+            match child.kind:
+                case CursorKind.OBJC_INTERFACE_DECL:
+                    type_name = child.displayname
+                    logger.info(f"Parsing {type_name}")
+                    parse_interface(child, category, skip_fields, skip_methods)
 
 
 if __name__ == "__main__":
@@ -280,8 +198,29 @@ if __name__ == "__main__":
         default="True",
         help="Disable struct packing (Default: Enabled)",
     )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        dest="verbose",
+        help="Enable verbose logging (Default: Disabled)"
+    )
+    parser.add_argument(
+        "--skip-fields",
+        action="store_true",
+        default=False,
+        help="Enable skipping of class field parsing (Default: Disabled)"
+    )
+    parser.add_argument(
+        "--skip-methods",
+        action="store_true",
+        default=False,
+        help="Enable skipping of class method parsing (Default: Disabled)"
+    )
 
-    args = parser.parse_args()
+    args = parser.parse_args().__dict__
+
+    if args.pop("verbose"):
+        logger.setLevel(DEBUG)
 
     prog = getCurrentProgram()
     sym_table = prog.getSymbolTable()
@@ -289,6 +228,5 @@ if __name__ == "__main__":
     func_man = prog.getFunctionManager()
     func_tag_man = func_man.getFunctionTagManager()
 
-    findDataTypes = b.remoteify(findDataTypes)
-
-    main(**args.__dict__)
+    with logging_redirect_tqdm():
+        main(**args)
