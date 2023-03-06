@@ -19,7 +19,7 @@ else:
 
 from ghidra.program.model.data import StructureDataType, DataType, CategoryPath, DataTypeConflictHandler, Category, \
     CharDataType
-from ghidra.program.model.symbol import SymbolType, SourceType
+from ghidra.program.model.symbol import SymbolType, SourceType, Namespace
 from ghidra.program.model.listing import Function, ParameterImpl, ReturnParameterImpl
 
 THISCALL = "__thiscall"
@@ -53,14 +53,6 @@ find_data_types = b.remoteify(find_data_types)
 
 def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str, typing.Optional[DataType], bool, str]:
     var_name = var_cursor.displayname
-
-    # children = list(field_cursor.get_children())
-    # if len(children) != 1:
-    #     logger.debug(f"TODO: Handle field declarations with {len(children)} children")
-    #     return
-    #
-    # field_cursor: Cursor = next(children)
-    # var_name = field_cursor.displayname
 
     type_name: str = var_cursor.type.spelling
     variable_type: DataType | None = None
@@ -109,10 +101,64 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
     return type_name, variable_type, pointer, var_name
 
 
-def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_methods=False):
+def parse_method(methods: dict[str, dict], method_cursor: Cursor):
+    method_name = method_cursor.displayname
+    method = methods.setdefault(method_name, {})
+    method["rtype"] = None
+    method["rtype_pointer"] = None
+    params = method.setdefault("params", {})
+
+    match method_cursor.objc_type_encoding[0]:
+        case "@":
+            method["rtype_pointer"] = True
+        case "v":
+            method["rtype"] = None
+        case "c":
+            method["rtype"] = "char"
+        case "i":
+            method["rtype"] = "int"
+        case "s":
+            method["rtype"] = "short"
+        case "q":
+            method["rtype"] = "long long"
+        case "C":
+            method["rtype"] = "unsigned char"
+        case "I":
+            method["rtype"] = "unsigned int"
+        case "S":
+            method["rtype"] = "unsigned short"
+        case "L":
+            method["rtype"] = "unsigned long"
+        case "Q":
+            method["rtype"] = "unsigned long long"
+        case "f":
+            method["rtype"] = "float"
+        case "d":
+            method["rtype"] = "double"
+        case "B":
+            method["rtype"] = "bool"
+        case other:
+            logger.debug(f"Unrecognized return type encoding {other} (method {method_name})")
+
+    children: list[Cursor] = list(method_cursor.get_children())
+    for child in children:
+        match child.kind:
+            case CursorKind.PARM_DECL:
+                param = params.setdefault(child.displayname, {})
+                param["type"] = child.type.spelling
+
+            case CursorKind.OBJC_CLASS_REF:
+                # Return type?
+                method["rtype"] = child.displayname
+
+    pass
+    # -(NSDictionary *)message;
+
+
+def parse_interface(cursor: Cursor, category: Category, skip_vars=False, skip_methods=False):
     struct = STRUCTS.setdefault(cursor.displayname, {})
     variables = struct.setdefault("vars", OrderedDict())
-    methods = struct.setdefault("methods", [])
+    methods = struct.setdefault("methods", {})
     dependencies = struct.setdefault("deps", {})
 
     with GhidraTransaction():
@@ -123,18 +169,23 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
 
         struct["type"] = data_type
 
-    instance_var_cursor: Cursor
-    for instance_var_cursor in cursor.get_children():
-        match instance_var_cursor.kind:
+    # namespace = get_class_symbol(cursor.displayname)
+    # if namespace is None:
+    #     logger.info(f"- Could not resolve symbol {cursor.displayname}. Skipping method loading")
+    #     skip_methods = True
+
+    instance_cursor: Cursor
+    for instance_cursor in cursor.get_children():
+        match instance_cursor.kind:
             case CursorKind.OBJC_IVAR_DECL:
-                if skip_fields:
-                    logger.debug(f"Skipping var {instance_var_cursor.displayname}")
+                if skip_vars:
+                    logger.debug(f"Skipping var {instance_cursor.displayname}")
                     continue
 
                 type_name, variable_type, pointer, variable_name = \
-                    parse_instance_variable(instance_var_cursor, category)
+                    parse_instance_variable(instance_cursor, category)
 
-                logger.debug(f"{instance_var_cursor.objc_type_encoding} - {variable_name}")
+                logger.debug(f"{instance_cursor.objc_type_encoding} - {variable_name}")
 
                 if variable_type is None:
                     logger.debug(f"- Need to resolve {type_name} ({pointer=})")
@@ -149,14 +200,16 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
 
             case CursorKind.OBJC_INSTANCE_METHOD_DECL:
                 if skip_methods:
-                    logger.debug(f"Skipping method {instance_var_cursor.displayname}")
+                    logger.debug(f"Skipping method {instance_cursor.displayname}")
                     continue
 
-                logger.debug(f"{instance_var_cursor.kind} {instance_var_cursor.displayname}")
+                logger.debug(f"{instance_cursor.kind} {instance_cursor.displayname}")
+
+                parse_method(methods, instance_cursor)
 
             case CursorKind.OBJC_PROPERTY_DECL:
                 if skip_methods:
-                    logger.debug(f"Skipping property {instance_var_cursor.displayname}")
+                    logger.debug(f"Skipping property {instance_cursor.displayname}")
                     continue
 
                 # @property (retain, nonatomic) NSString* name;
@@ -165,7 +218,7 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
                 #
                 # -(NSString*)name;
                 # -(void)setName:(NSString*)userName;
-                logger.debug(f"TODO: Implement {instance_var_cursor.kind} {instance_var_cursor.displayname}")
+                logger.debug(f"TODO: Implement {instance_cursor.kind} {instance_cursor.displayname}")
             case other:
                 logger.warning(f"Unsupported cursor kind {other}")
 
@@ -184,7 +237,7 @@ def push_structs(pack, base_category, progress):
         logger.debug(f"Getting/creating category path {category_path}")
         uncategorized_category = dt_man.createCategory(category_path)
 
-        # Resolve dependencies
+        # First pass: Dependency resolution
         iterator = STRUCTS.items()
         if progress:
             iterator = tqdm(iterator, leave=False, unit="struct", desc="Resolving dependencies")
@@ -205,14 +258,14 @@ def push_structs(pack, base_category, progress):
                 elif candidates == 1:
                     data_type = type_candidates[0]
 
-                elif candidates != 1:
+                else:
                     logger.debug(f"- Got {candidates} type candidates for dependency type name {dep}")
                     continue
 
                 for variable in variables:
                     struct["vars"][variable]["type"] = data_type
 
-        # Populate structs
+        # Second pass: Struct population
         iterator = STRUCTS.items()
         if progress:
             iterator = tqdm(iterator, unit="struct", leave=False, desc="Pushing structs")
@@ -226,6 +279,7 @@ def push_structs(pack, base_category, progress):
             if progress:
                 iiterator = tqdm(iiterator, unit="var", leave=False)
 
+            # Push variables
             for variable_name, var in iiterator:
                 if var["pointer"]:
                     pointer = dt_man.getPointer(var["type"])
@@ -236,8 +290,55 @@ def push_structs(pack, base_category, progress):
             if pack:
                 data_type.setToDefaultPacking()
 
+            # Push methods
+            namespace = sym_table.getNamespace(type_name, None)
+            iiterator = struct.get("methods").items()
+            if progress:
+                iiterator = tqdm(iiterator, leave=False, unit="dep", desc=f"Processing {type_name}")
 
-def main(headers_path: Path, pack: bool, progress: bool, skip_fields, skip_methods, base_category):
+            symbols = sym_table.getSymbols(namespace)
+            symbols = {
+                symbol.getName(): symbol
+                for symbol in filter(lambda symbol: symbol.getSymbolType() == SymbolType.FUNCTION, symbols)
+            }
+
+            for method_name, method in iiterator:
+
+                if symbol := symbols.get(method_name):
+                    params = []
+
+                    for param_name, param in method["params"].items():
+                        param_type_candidates = find_data_types(param["type"])
+
+                        if len(return_type_candidates) == 1:
+                            params.append(ParameterImpl(
+                                param_name,
+                                param_type_candidates[0],
+                                prog,
+                            ))
+
+                    return_type_candidates = find_data_types(method["rtype"])
+                    return_type = None
+                    if len(return_type_candidates) == 1:
+                        return_type = return_type_candidates[0]
+
+                        if method["rtype_pointer"]:
+                            return_type = dt_man.getPointer(return_type)
+                    else:
+                        logger.debug(f"- Got {len(return_type_candidates)} type candidates for type name {method['rtype']}")
+
+                    func = func_man.getFunction(symbol.getID())
+                    func.updateFunction(
+                        THISCALL,
+                        ReturnParameterImpl(return_type, prog),
+                        params,
+                        Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+                        False,
+                        SourceType.USER_DEFINED,
+                    )
+
+
+def main(headers_path: Path, pack: bool, progress: bool, skip_vars: bool, skip_methods: bool, base_category: str):
     if headers_path.is_dir():
         iterator = list(headers_path.iterdir())
 
@@ -271,7 +372,7 @@ def main(headers_path: Path, pack: bool, progress: bool, skip_fields, skip_metho
                 case CursorKind.OBJC_INTERFACE_DECL:
                     type_name = child.displayname
                     logger.info(f"Parsing {type_name}")
-                    parse_interface(child, category, skip_fields, skip_methods)
+                    parse_interface(child, category, skip_vars, skip_methods)
 
     push_structs(pack, base_category, progress)
 
@@ -319,10 +420,10 @@ if __name__ == "__main__":
         help="Disable progress bars (Default: Enabled)",
     )
     parser.add_argument(
-        "--skip-fields",
+        "--skip-vars",
         action="store_true",
         default=False,
-        help="Enable skipping of class field parsing (Default: Disabled)",
+        help="Enable skipping of instance variable parsing (Default: Disabled)",
     )
     parser.add_argument(
         "--skip-methods",
