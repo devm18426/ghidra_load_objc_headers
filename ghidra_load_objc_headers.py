@@ -109,7 +109,7 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
     return type_name, variable_type, pointer, var_name
 
 
-def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_methods=False):
+def parse_interface(cursor: Cursor, category: Category, pack=True, skip_fields=False, skip_methods=False):
     struct = STRUCTS.setdefault(cursor.displayname, {})
     variables = struct.setdefault("vars", OrderedDict())
     methods = struct.setdefault("methods", [])
@@ -117,6 +117,10 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
 
     with GhidraTransaction():
         data_type = StructureDataType(category.getCategoryPath(), cursor.displayname, 0)
+
+        if pack:
+            data_type.setToDefaultPacking()
+
         logger.debug(f"- Pushing {cursor.displayname} to {category}")
         data_type = category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
 
@@ -130,7 +134,7 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
                     logger.debug(f"Skipping var {instance_var_cursor.displayname}")
                     continue
 
-                type_name, variable_type, pointer, variable_name =\
+                type_name, variable_type, pointer, variable_name = \
                     parse_instance_variable(instance_var_cursor, category)
 
                 logger.debug(f"{instance_var_cursor.objc_type_encoding} - {variable_name}")
@@ -169,7 +173,7 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
                 logger.warning(f"Unsupported cursor kind {other}")
 
 
-def push_structs(base_category):
+def push_structs(pack, base_category):
     if len(STRUCTS) == 0:
         logger.info("No structs to push")
         return
@@ -185,7 +189,8 @@ def push_structs(base_category):
 
         # Resolve dependencies
         for type_name, struct in tqdm(STRUCTS.items(), leave=False, unit="struct", desc="Resolving dependencies"):
-            for dep, variables in tqdm(struct.get("deps").items(), leave=False, unit="dep", desc=f"Processing {type_name}"):
+            for dep, variables in tqdm(struct.get("deps").items(), leave=False, unit="dep",
+                                       desc=f"Processing {type_name}"):
                 type_candidates = find_data_types(dep)
 
                 if (candidates := len(type_candidates)) == 0:
@@ -200,14 +205,20 @@ def push_structs(base_category):
                     logger.debug(f"- Got {candidates} type candidates for dependency type name {dep}")
                     continue
 
+                if pack and isinstance(data_type, StructureDataType):
+                    data_type.setToDefaultPacking()
+
                 for variable in variables:
                     struct["vars"][variable]["type"] = data_type
 
         # Populate structs
         for type_name, struct in tqdm(STRUCTS.items(), unit="struct", leave=False, desc="Pushing structs"):
-            data_type = struct["type"]
+            data_type: StructureDataType = struct["type"]
 
-            for variable_name, var in tqdm(OrderedDict(reversed(list(struct["vars"].items()))).items(), unit="var", leave=False):
+            data_type.deleteAll()
+
+            for variable_name, var in tqdm(OrderedDict(reversed(list(struct["vars"].items()))).items(), unit="var",
+                                           leave=False):
                 if var["pointer"]:
                     pointer = dt_man.getPointer(var["type"])
                     data_type.insertAtOffset(0, pointer, pointer.length, variable_name, "")
@@ -245,9 +256,9 @@ def main(headers_path: Path, pack: bool, skip_fields, skip_methods, base_categor
                 case CursorKind.OBJC_INTERFACE_DECL:
                     type_name = child.displayname
                     logger.info(f"Parsing {type_name}")
-                    parse_interface(child, category, skip_fields, skip_methods)
+                    parse_interface(child, category, pack, skip_fields, skip_methods)
 
-    push_structs(base_category)
+    push_structs(pack, base_category)
 
 
 if __name__ == "__main__":
@@ -277,7 +288,7 @@ if __name__ == "__main__":
         "--disable-packing",
         dest="pack",
         action="store_false",
-        default="True",
+        default=True,
         help="Disable struct packing (Default: Enabled)",
     )
     parser.add_argument(
