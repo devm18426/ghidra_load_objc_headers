@@ -18,8 +18,8 @@ else:
     b = ghidra_bridge.GhidraBridge(namespace=globals(), hook_import=True)
 
 from ghidra.program.model.data import StructureDataType, DataType, CategoryPath, DataTypeConflictHandler, Category, \
-    CharDataType
-from ghidra.program.model.symbol import SymbolType, SourceType, Namespace
+    CharDataType, ArchiveType
+from ghidra.program.model.symbol import SymbolType, SourceType
 from ghidra.program.model.listing import Function, ParameterImpl, ReturnParameterImpl
 
 THISCALL = "__thiscall"
@@ -112,7 +112,7 @@ def parse_method(methods: dict[str, dict], method_cursor: Cursor):
         case "@":
             method["rtype_pointer"] = True
         case "v":
-            method["rtype"] = None
+            method["rtype"] = "void"
         case "c":
             method["rtype"] = "char"
         case "i":
@@ -138,7 +138,7 @@ def parse_method(methods: dict[str, dict], method_cursor: Cursor):
         case "B":
             method["rtype"] = "bool"
         case other:
-            logger.debug(f"Unrecognized return type encoding {other} (method {method_name})")
+            logger.debug(f"- Unrecognized return type encoding {other} (method {method_name})")
 
     children: list[Cursor] = list(method_cursor.get_children())
     for child in children:
@@ -148,11 +148,17 @@ def parse_method(methods: dict[str, dict], method_cursor: Cursor):
                 param["type"] = child.type.spelling
 
             case CursorKind.OBJC_CLASS_REF:
-                # Return type?
                 method["rtype"] = child.displayname
 
-    pass
-    # -(NSDictionary *)message;
+            case CursorKind.TYPE_REF:
+                method["rtype"] = child.displayname
+
+            case CursorKind.OBJC_PROTOCOL_REF:
+                # TODO: Figure this out
+                pass
+
+            case other:
+                logger.debug(f"- Unhandled cursor kind {child.kind} (method {method_name})")
 
 
 def parse_interface(cursor: Cursor, category: Category, skip_vars=False, skip_methods=False):
@@ -168,11 +174,6 @@ def parse_interface(cursor: Cursor, category: Category, skip_vars=False, skip_me
         data_type = category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
 
         struct["type"] = data_type
-
-    # namespace = get_class_symbol(cursor.displayname)
-    # if namespace is None:
-    #     logger.info(f"- Could not resolve symbol {cursor.displayname}. Skipping method loading")
-    #     skip_methods = True
 
     instance_cursor: Cursor
     for instance_cursor in cursor.get_children():
@@ -229,7 +230,6 @@ def push_structs(pack, base_category, progress):
         return
 
     logger.info(f"Pushing {len(STRUCTS)} structs")
-    # logger.debug(f"{STRUCTS=}")
 
     with GhidraTransaction():
         # Unknown types should go in an "uncategorized" category
@@ -259,8 +259,13 @@ def push_structs(pack, base_category, progress):
                     data_type = type_candidates[0]
 
                 else:
-                    logger.debug(f"- Got {candidates} type candidates for dependency type name {dep}")
-                    continue
+                    for candidate in type_candidates:
+                        if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
+                            data_type = candidate
+                            break
+
+                    if data_type is None:
+                        logger.error(f"- Failed to resolve data type {dep}")
 
                 for variable in variables:
                     struct["vars"][variable]["type"] = data_type
@@ -277,7 +282,7 @@ def push_structs(pack, base_category, progress):
 
             iiterator = OrderedDict(reversed(list(struct["vars"].items()))).items()
             if progress:
-                iiterator = tqdm(iiterator, unit="var", leave=False)
+                iiterator = tqdm(iiterator, unit="var", leave=False, desc=f"Pushing variables ({type_name})")
 
             # Push variables
             for variable_name, var in iiterator:
@@ -294,9 +299,10 @@ def push_structs(pack, base_category, progress):
             namespace = sym_table.getNamespace(type_name, None)
             iiterator = struct.get("methods").items()
             if progress:
-                iiterator = tqdm(iiterator, leave=False, unit="dep", desc=f"Processing {type_name}")
+                iiterator = tqdm(iiterator, leave=False, unit="method", desc=f"Pushing methods ({type_name})")
 
             symbols = sym_table.getSymbols(namespace)
+            # TODO: Speed this up
             symbols = {
                 symbol.getName(): symbol
                 for symbol in filter(lambda symbol: symbol.getSymbolType() == SymbolType.FUNCTION, symbols)
@@ -310,7 +316,7 @@ def push_structs(pack, base_category, progress):
                     for param_name, param in method["params"].items():
                         param_type_candidates = find_data_types(param["type"])
 
-                        if len(return_type_candidates) == 1:
+                        if len(param_type_candidates) == 1:
                             params.append(ParameterImpl(
                                 param_name,
                                 param_type_candidates[0],
@@ -325,7 +331,13 @@ def push_structs(pack, base_category, progress):
                         if method["rtype_pointer"]:
                             return_type = dt_man.getPointer(return_type)
                     else:
-                        logger.debug(f"- Got {len(return_type_candidates)} type candidates for type name {method['rtype']}")
+                        for candidate in return_type_candidates:
+                            if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
+                                return_type = candidate
+                                break
+
+                        if return_type is None:
+                            logger.error(f"- Failed to resolve return data type {method['rtype']}")
 
                     func = func_man.getFunction(symbol.getID())
                     func.updateFunction(
@@ -337,13 +349,15 @@ def push_structs(pack, base_category, progress):
                         SourceType.USER_DEFINED,
                     )
 
+    logger.info("Done")
+
 
 def main(headers_path: Path, pack: bool, progress: bool, skip_vars: bool, skip_methods: bool, base_category: str):
     if headers_path.is_dir():
         iterator = list(headers_path.iterdir())
 
         if progress:
-            iterator = tqdm(iterator, unit="header", leave=False, desc="Processing headers")
+            iterator = tqdm(iterator, unit="header", leave=False, desc="Parsing headers")
 
     else:
         iterator = [headers_path]
