@@ -118,7 +118,9 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
     with GhidraTransaction():
         data_type = StructureDataType(category.getCategoryPath(), cursor.displayname, 0)
         logger.debug(f"- Pushing {cursor.displayname} to {category}")
-        category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
+        data_type = category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
+
+        struct["type"] = data_type
 
     instance_var_cursor: Cursor
     for instance_var_cursor in cursor.get_children():
@@ -167,13 +169,17 @@ def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_
                 logger.warning(f"Unsupported cursor kind {other}")
 
 
-def push_structs():
+def push_structs(base_category):
+    if len(STRUCTS) == 0:
+        logger.info("No structs to push")
+        return
+
     logger.info(f"Pushing {len(STRUCTS)} structs")
     logger.debug(f"{STRUCTS=}")
 
     with GhidraTransaction():
         # Unknown types should go in an "uncategorized" category
-        category_path = CategoryPath(f"/MISSING_TYPES")
+        category_path = CategoryPath(f"/{base_category}/MISSING_TYPES")
         logger.debug(f"Getting/creating category path {category_path}")
         uncategorized_category = dt_man.createCategory(category_path)
 
@@ -185,8 +191,7 @@ def push_structs():
                 if (candidates := len(type_candidates)) == 0:
                     logger.debug(f"- Creating empty uncategorized struct {dep}")
 
-                    data_type = StructureDataType(dep, 0)
-                    uncategorized_category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
+                    data_type = StructureDataType(uncategorized_category.getCategoryPath(), dep, 0)
 
                 elif candidates == 1:
                     data_type = type_candidates[0]
@@ -200,6 +205,8 @@ def push_structs():
 
         # Populate structs
         for type_name, struct in tqdm(STRUCTS.items(), leave=False):
+            data_type = struct["type"]
+
             for variable_name, var in tqdm(OrderedDict(reversed(list(struct["vars"].items()))).items(), leave=False):
                 if var["pointer"]:
                     pointer = dt_man.getPointer(var["type"])
@@ -208,7 +215,7 @@ def push_structs():
                     data_type.insertAtOffset(0, var["type"], var["type"].length, variable_name, "")
 
 
-def main(headers_path: Path, pack: bool, skip_fields, skip_methods):
+def main(headers_path: Path, pack: bool, skip_fields, skip_methods, base_category):
     if headers_path.is_dir():
         iterator = tqdm(list(headers_path.iterdir()), unit="header", leave=False, desc="Processing headers")
     else:
@@ -227,7 +234,7 @@ def main(headers_path: Path, pack: bool, skip_fields, skip_methods):
             continue
 
         with GhidraTransaction():
-            category_path = CategoryPath(f"/{header_f.name}")
+            category_path = CategoryPath(f"/{base_category}/{header_f.name}")
             logger.debug(f"Getting/creating category path {category_path}")
             category = dt_man.createCategory(category_path)
 
@@ -240,7 +247,7 @@ def main(headers_path: Path, pack: bool, skip_fields, skip_methods):
                     logger.info(f"Parsing {type_name}")
                     parse_interface(child, category, skip_fields, skip_methods)
 
-    push_structs()
+    push_structs(base_category)
 
 
 if __name__ == "__main__":
@@ -290,6 +297,12 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Enable skipping of class method parsing (Default: Disabled)"
+    )
+    parser.add_argument(
+        "-c", "--base-category",
+        default=(default := "objc_loader"),
+        dest="base_category",
+        help=f"Base category path for all loaded types (Default: {default})",
     )
 
     args = parser.parse_args().__dict__
