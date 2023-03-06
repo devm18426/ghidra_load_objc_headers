@@ -460,6 +460,8 @@ if __name__ == "__main__":
     if args.pop("verbose"):
         logger.setLevel(DEBUG)
         handler.setFormatter(logging.Formatter("[%(levelname)-5s] %(message)s"))
+    else:
+        logger.setLevel(INFO)
 
     logger.addHandler(handler)
     logger.propagate = False
