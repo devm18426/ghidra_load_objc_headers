@@ -118,9 +118,6 @@ def parse_interface(cursor: Cursor, category: Category, pack=True, skip_fields=F
     with GhidraTransaction():
         data_type = StructureDataType(category.getCategoryPath(), cursor.displayname, 0)
 
-        if pack:
-            data_type.setToDefaultPacking()
-
         logger.debug(f"- Pushing {cursor.displayname} to {category}")
         data_type = category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
 
@@ -205,9 +202,6 @@ def push_structs(pack, base_category):
                     logger.debug(f"- Got {candidates} type candidates for dependency type name {dep}")
                     continue
 
-                if pack and isinstance(data_type, StructureDataType):
-                    data_type.setToDefaultPacking()
-
                 for variable in variables:
                     struct["vars"][variable]["type"] = data_type
 
@@ -224,6 +218,9 @@ def push_structs(pack, base_category):
                     data_type.insertAtOffset(0, pointer, pointer.length, variable_name, "")
                 else:
                     data_type.insertAtOffset(0, var["type"], var["type"].length, variable_name, "")
+
+            if pack:
+                data_type.setToDefaultPacking()
 
 
 def main(headers_path: Path, pack: bool, skip_fields, skip_methods, base_category):
