@@ -3,8 +3,10 @@ import sys
 import typing
 from argparse import ArgumentParser, RawTextHelpFormatter
 from collections import OrderedDict
-from logging import DEBUG
+from functools import partial
+from glob import iglob
 from pathlib import Path
+from typing import Iterator
 
 from clang.cindex import Index, Cursor, CursorKind, TypeKind, Type, TranslationUnitLoadError
 from tqdm import tqdm
@@ -352,18 +354,20 @@ def push_structs(pack, base_category, progress):
     logger.info("Done")
 
 
-def main(headers_path: Path, pack: bool, progress: bool, skip_vars: bool, skip_methods: bool, base_category: str):
-    if headers_path.is_dir():
-        iterator = list(headers_path.iterdir())
+def main(headers: Iterator, pack: bool, progress: bool, skip_vars: bool, skip_methods: bool, base_category: str):
+    iterator = list(headers)
 
-        if progress:
-            iterator = tqdm(iterator, unit="header", leave=False, desc="Parsing headers")
+    if len(iterator) == 0:
+        logger.info("No files to parse")
+        return
 
-    else:
-        iterator = [headers_path]
+    if progress:
+        iterator = tqdm(iterator, unit="header", leave=False, desc="Parsing headers")
 
     index = Index.create()
-    for header_f in iterator:
+    for header in iterator:
+        header_f = Path(header)
+
         try:
             # https://github.com/llvm-mirror/clang/blob/release_60/include/clang/Driver/Types.def
             translation_unit = index.parse(header_f, args=(
@@ -411,8 +415,7 @@ if __name__ == "__main__":
         description="Load Objective-C header data into Ghidra",
         formatter_class=RawTextHelpFormatter
     )
-    # TODO: Support globs
-    parser.add_argument("headers_path", type=Path, help="Path to single header file or directory containing headers")
+    parser.add_argument("headers", type=partial(iglob, recursive=True), help="Path to header files (globs supported)")
     parser.add_argument(
         "--disable-packing",
         dest="pack",
