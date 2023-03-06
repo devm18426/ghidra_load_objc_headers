@@ -179,13 +179,13 @@ def push_structs(base_category):
 
     with GhidraTransaction():
         # Unknown types should go in an "uncategorized" category
-        category_path = CategoryPath(f"/{base_category}/MISSING_TYPES")
+        category_path = CategoryPath(f"/{base_category}/___MISSING_TYPES")
         logger.debug(f"Getting/creating category path {category_path}")
         uncategorized_category = dt_man.createCategory(category_path)
 
         # Resolve dependencies
-        for type_name, struct in tqdm(STRUCTS.items(), leave=False):
-            for dep, variables in tqdm(struct.get("deps").items(), leave=False):
+        for type_name, struct in tqdm(STRUCTS.items(), leave=False, unit="struct", desc="Resolving dependencies"):
+            for dep, variables in tqdm(struct.get("deps").items(), leave=False, unit="dep", desc=f"Processing {type_name}"):
                 type_candidates = find_data_types(dep)
 
                 if (candidates := len(type_candidates)) == 0:
@@ -204,10 +204,10 @@ def push_structs(base_category):
                     struct["vars"][variable]["type"] = data_type
 
         # Populate structs
-        for type_name, struct in tqdm(STRUCTS.items(), leave=False):
+        for type_name, struct in tqdm(STRUCTS.items(), unit="struct", leave=False, desc="Pushing structs"):
             data_type = struct["type"]
 
-            for variable_name, var in tqdm(OrderedDict(reversed(list(struct["vars"].items()))).items(), leave=False):
+            for variable_name, var in tqdm(OrderedDict(reversed(list(struct["vars"].items()))).items(), unit="var", leave=False):
                 if var["pointer"]:
                     pointer = dt_man.getPointer(var["type"])
                     data_type.insertAtOffset(0, pointer, pointer.length, variable_name, "")
