@@ -109,7 +109,7 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
     return type_name, variable_type, pointer, var_name
 
 
-def parse_interface(cursor: Cursor, category: Category, pack=True, skip_fields=False, skip_methods=False):
+def parse_interface(cursor: Cursor, category: Category, skip_fields=False, skip_methods=False):
     struct = STRUCTS.setdefault(cursor.displayname, {})
     variables = struct.setdefault("vars", OrderedDict())
     methods = struct.setdefault("methods", [])
@@ -170,13 +170,13 @@ def parse_interface(cursor: Cursor, category: Category, pack=True, skip_fields=F
                 logger.warning(f"Unsupported cursor kind {other}")
 
 
-def push_structs(pack, base_category):
+def push_structs(pack, base_category, progress):
     if len(STRUCTS) == 0:
         logger.info("No structs to push")
         return
 
     logger.info(f"Pushing {len(STRUCTS)} structs")
-    logger.debug(f"{STRUCTS=}")
+    # logger.debug(f"{STRUCTS=}")
 
     with GhidraTransaction():
         # Unknown types should go in an "uncategorized" category
@@ -185,9 +185,16 @@ def push_structs(pack, base_category):
         uncategorized_category = dt_man.createCategory(category_path)
 
         # Resolve dependencies
-        for type_name, struct in tqdm(STRUCTS.items(), leave=False, unit="struct", desc="Resolving dependencies"):
-            for dep, variables in tqdm(struct.get("deps").items(), leave=False, unit="dep",
-                                       desc=f"Processing {type_name}"):
+        iterator = STRUCTS.items()
+        if progress:
+            iterator = tqdm(iterator, leave=False, unit="struct", desc="Resolving dependencies")
+
+        for type_name, struct in iterator:
+            iiterator = struct.get("deps").items()
+            if progress:
+                iiterator = tqdm(iiterator, leave=False, unit="dep", desc=f"Processing {type_name}")
+
+            for dep, variables in iiterator:
                 type_candidates = find_data_types(dep)
 
                 if (candidates := len(type_candidates)) == 0:
@@ -206,13 +213,20 @@ def push_structs(pack, base_category):
                     struct["vars"][variable]["type"] = data_type
 
         # Populate structs
-        for type_name, struct in tqdm(STRUCTS.items(), unit="struct", leave=False, desc="Pushing structs"):
+        iterator = STRUCTS.items()
+        if progress:
+            iterator = tqdm(iterator, unit="struct", leave=False, desc="Pushing structs")
+
+        for type_name, struct in iterator:
             data_type: StructureDataType = struct["type"]
 
             data_type.deleteAll()
 
-            for variable_name, var in tqdm(OrderedDict(reversed(list(struct["vars"].items()))).items(), unit="var",
-                                           leave=False):
+            iiterator = OrderedDict(reversed(list(struct["vars"].items()))).items()
+            if progress:
+                iiterator = tqdm(iiterator, unit="var", leave=False)
+
+            for variable_name, var in iiterator:
                 if var["pointer"]:
                     pointer = dt_man.getPointer(var["type"])
                     data_type.insertAtOffset(0, pointer, pointer.length, variable_name, "")
@@ -223,9 +237,13 @@ def push_structs(pack, base_category):
                 data_type.setToDefaultPacking()
 
 
-def main(headers_path: Path, pack: bool, skip_fields, skip_methods, base_category):
+def main(headers_path: Path, pack: bool, progress: bool, skip_fields, skip_methods, base_category):
     if headers_path.is_dir():
-        iterator = tqdm(list(headers_path.iterdir()), unit="header", leave=False, desc="Processing headers")
+        iterator = list(headers_path.iterdir())
+
+        if progress:
+            iterator = tqdm(iterator, unit="header", leave=False, desc="Processing headers")
+
     else:
         iterator = [headers_path]
 
@@ -253,9 +271,9 @@ def main(headers_path: Path, pack: bool, skip_fields, skip_methods, base_categor
                 case CursorKind.OBJC_INTERFACE_DECL:
                     type_name = child.displayname
                     logger.info(f"Parsing {type_name}")
-                    parse_interface(child, category, pack, skip_fields, skip_methods)
+                    parse_interface(child, category, skip_fields, skip_methods)
 
-    push_structs(pack, base_category)
+    push_structs(pack, base_category, progress)
 
 
 if __name__ == "__main__":
@@ -279,7 +297,6 @@ if __name__ == "__main__":
         formatter_class=RawTextHelpFormatter
     )
     # TODO: Support globs
-    # TODO: Quiet mode
     parser.add_argument("headers_path", type=Path, help="Path to single header file or directory containing headers")
     parser.add_argument(
         "--disable-packing",
@@ -292,19 +309,26 @@ if __name__ == "__main__":
         "-v", "--verbose",
         action="store_true",
         dest="verbose",
-        help="Enable verbose logging (Default: Disabled)"
+        help="Enable verbose logging (Default: Disabled)",
+    )
+    parser.add_argument(
+        "--no-prog",
+        action="store_false",
+        dest="progress",
+        default=True,
+        help="Disable progress bars (Default: Enabled)",
     )
     parser.add_argument(
         "--skip-fields",
         action="store_true",
         default=False,
-        help="Enable skipping of class field parsing (Default: Disabled)"
+        help="Enable skipping of class field parsing (Default: Disabled)",
     )
     parser.add_argument(
         "--skip-methods",
         action="store_true",
         default=False,
-        help="Enable skipping of class method parsing (Default: Disabled)"
+        help="Enable skipping of class method parsing (Default: Disabled)",
     )
     parser.add_argument(
         "-c", "--base-category",
@@ -331,5 +355,9 @@ if __name__ == "__main__":
     func_man = prog.getFunctionManager()
     func_tag_man = func_man.getFunctionTagManager()
 
-    with logging_redirect_tqdm(loggers=[logger]):
+    if args["progress"]:
+        with logging_redirect_tqdm(loggers=[logger]):
+            main(**args)
+
+    else:
         main(**args)
