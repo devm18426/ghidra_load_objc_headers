@@ -425,9 +425,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-v", "--verbose",
-        action="store_true",
-        dest="verbose",
-        help="Enable verbose logging (Default: Disabled)",
+        action="count",
+        default=0,
+        dest="verbosity",
+        help="Set logging verbosity (Default: Least verbosity)",
     )
     parser.add_argument(
         "--no-prog",
@@ -460,9 +461,16 @@ if __name__ == "__main__":
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(message)s"))
 
-    if args.pop("verbose"):
+    verbosity = args.pop("verbosity")
+    if verbosity > 0:
         logger.setLevel(DEBUG)
-        handler.setFormatter(logging.Formatter("[%(levelname)-5s] %(message)s"))
+
+        if verbosity == 1:
+            handler.setFormatter(logging.Formatter("[%(levelname)-5s] %(message)s"))
+
+        if verbosity == 2:
+            handler.setFormatter(logging.Formatter("[%(levelname)-5s][%(filename)s:%(lineno)d] %(message)s"))
+
     else:
         logger.setLevel(INFO)
 
