@@ -21,7 +21,8 @@ else:
     b = ghidra_bridge.GhidraBridge(namespace=globals(), hook_import=True)
 
 from ghidra.program.model.data import StructureDataType, DataType, CategoryPath, DataTypeConflictHandler, Category, \
-    CharDataType, ArchiveType
+    CharDataType, ArchiveType, IntegerDataType, UnsignedIntegerDataType, ShortDataType, UnsignedLongLongDataType, \
+    UnsignedShortDataType, LongDataType, UnsignedLongDataType, LongLongDataType
 from ghidra.program.model.symbol import SymbolType, SourceType
 from ghidra.program.model.listing import Function, ParameterImpl, ReturnParameterImpl
 
@@ -82,7 +83,61 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
         case TypeKind.CHAR_S:
             variable_type = CharDataType()
 
+        case TypeKind.INT:
+            variable_type = IntegerDataType()
+
+        case TypeKind.UINT:
+            variable_type = UnsignedIntegerDataType()
+
+        case TypeKind.LONG:
+            variable_type = LongDataType()
+
+        case TypeKind.ULONG:
+            variable_type = UnsignedLongDataType()
+
+        case TypeKind.LONGLONG:
+            variable_type = LongLongDataType()
+
+        case TypeKind.ULONGLONG:
+            variable_type = UnsignedLongLongDataType()
+
+        case TypeKind.SHORT:
+            variable_type = ShortDataType()
+
+        case TypeKind.USHORT:
+            variable_type = UnsignedShortDataType()
+
+        case TypeKind.ATOMIC:
+            atomic_tokens = var_cursor.get_tokens()
+
+            next(atomic_tokens, None)  # Should be TokenKind.KEYWORD, spelling="_Atomic"
+            id_token = next(atomic_tokens, None)
+            if id_token and id_token.kind in (TokenKind.IDENTIFIER, TokenKind.KEYWORD):
+                type_name = id_token.spelling
+
+            type_candidates = find_data_types(type_name)
+
+            if len(type_candidates) == 1:
+                variable_type = type_candidates[0]
+            else:
+                for candidate in type_candidates:
+                    if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
+                        variable_type = candidate
+                        break
+
+                if variable_type is None:
+                    logger.error(f"- Failed to resolve atomic data type {type_name}")
+
         case TypeKind.POINTER:
+            if "unnamed struct" in type_name:
+                struct_decl_tokens = var_cursor.get_tokens()
+
+                if (struct_keyword := next(struct_decl_tokens, None)) and struct_keyword.kind == TokenKind.KEYWORD and \
+                        struct_keyword.spelling == "struct":
+
+                    if (id_token := next(struct_decl_tokens, None)) and id_token.kind == TokenKind.IDENTIFIER:
+                        type_name = id_token.spelling
+
             type_candidates = find_data_types(type_name)
 
             if len(type_candidates) == 1:
@@ -91,16 +146,32 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
             else:
                 logger.debug(f"- Got {len(type_candidates)} type candidates for type name {var_cursor.type.spelling}")
 
-        case other:
-            # https://nshipster.com/type-encodings/
+        case TypeKind.ELABORATED:
+            # Inline struct declaration, etc.
+
+            if "unnamed struct" in type_name:
+                struct_decl_tokens = var_cursor.type.get_declaration().get_tokens()
+
+                next(struct_decl_tokens, None)  # Should be TokenKind.KEYWORD, spelling="struct"
+                id_token = next(struct_decl_tokens, None)
+                if id_token and id_token.kind == TokenKind.IDENTIFIER:
+                    type_name = id_token.spelling
 
             type_candidates = find_data_types(type_name)
-            # if var_cursor.objc_type_encoding == "@":
-            # Type is an object (or pointer to)
-            # type_candidates = find_data_types(type_name)
-            # else:
-            # Type is primitive
-            # type_candidates = find_data_types(other.name.lower())
+
+            if len(type_candidates) == 1:
+                variable_type = type_candidates[0]
+            else:
+                for candidate in type_candidates:
+                    if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
+                        variable_type = candidate
+                        break
+
+                if variable_type is None:
+                    logger.error(f"- Failed to resolve data type {type_name}")
+
+        case other:
+            type_candidates = find_data_types(type_name)
 
             if len(type_candidates) == 1:
                 variable_type = type_candidates[0]
@@ -141,32 +212,30 @@ def parse_method(methods: dict[str, dict], method_cursor: Cursor):
 
 
 def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
-    struct_type_name = struct_cursor.displayname
+    struct_type_name = struct_cursor.type.spelling.removeprefix("struct ")
 
     candidates = find_data_types(struct_type_name)
 
     if len(candidates) == 1:
+        # TODO: Consider parsing anyways
         logger.debug(f"- Found existing type {struct_type_name}")
         return
 
     else:
+        if struct_type_name.startswith("(unnamed "):
+            tokens = struct_cursor.get_tokens()
+            next(tokens, None)  # Should be TokenKind.KEYWORD, spelling="struct"
+            id_token = next(tokens, None)
+            if id_token and id_token.kind == TokenKind.IDENTIFIER:
+                struct_type_name = id_token.spelling
+
+            candidates = find_data_types(struct_type_name)
+
+            if len(candidates) == 1:
+                logger.debug(f"- Found existing type {struct_type_name}")
+                return
+
         with GhidraTransaction():
-            if not struct_type_name:
-                tokens = struct_cursor.get_tokens()
-                next(tokens, None)  # Should be TokenKind.KEYWORD, spelling="struct"
-                id_token = next(tokens, None)
-                if id_token and id_token.kind == TokenKind.IDENTIFIER:
-                    struct_type_name = id_token.spelling
-                else:
-                    struct_type_name = f"MISSING_STRUCT_NAME_{struct_cursor.hash}"
-                    logger.debug(f"- Missing struct name. Using {struct_type_name}")
-
-                candidates = find_data_types(struct_type_name)
-
-                if len(candidates) == 1:
-                    logger.debug(f"- Found existing type {struct_type_name}")
-                    return
-
             data_type = StructureDataType(category.getCategoryPath(), struct_type_name, 0)
 
             logger.debug(f"- Pushing {struct_type_name} to {category}")
@@ -309,7 +378,7 @@ def push_structs(pack, base_category, progress):
                 type_candidates = find_data_types(dep)
 
                 if (candidates := len(type_candidates)) == 0:
-                    logger.debug(f"- Creating empty uncategorized struct {dep}")
+                    logger.debug(f"- Creating empty uncategorized struct {dep} while parsing {type_name}")
 
                     data_type = StructureDataType(uncategorized_category.getCategoryPath(), dep, 0)
 
