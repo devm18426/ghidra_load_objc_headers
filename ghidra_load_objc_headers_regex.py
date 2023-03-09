@@ -264,10 +264,10 @@ if __name__ == "__main__":
           / /  / __ \/ __ `/ __  / _ \/ ___/
          / /__/ /_/ / /_/ / /_/ /  __/ /    
          \____|____/\__,_/\__,_/\___/_/     
-                                            """
+                                               """
     print(banner)
     parser = ArgumentParser(
-        description="Load Objective-C header data into Ghidra",
+        description="Load Objective-C header data into Ghidra (Legacy RegEx Edition)",
         formatter_class=RawTextHelpFormatter
     )
     # TODO: Support globs
