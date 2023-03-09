@@ -59,7 +59,12 @@ def remote_find_data_types(type_str):
 remote_find_data_types = b.remoteify(remote_find_data_types)
 
 
-def find_data_types(type_str) -> tuple[str, list[DataType]]:
+def find_data_type(type_str) -> tuple[str, DataType | None]:
+    """
+    Search Ghidra for data type that corresponds to type_str.
+    :param type_str: Name of type
+    :return: Type if found, else None
+    """
     if type_str == "unsigned":
         type_str = "unsigned int"
 
@@ -68,16 +73,7 @@ def find_data_types(type_str) -> tuple[str, list[DataType]]:
         type_str = type_str.removeprefix("_Atomic(").removesuffix(")")
         type_str = type_str.removeprefix("struct ")
 
-    return type_str, remote_find_data_types(type_str)
-
-
-def find_data_type(type_str) -> tuple[str, DataType | None]:
-    """
-    Search Ghidra for data type that corresponds to type_str.
-    :param type_str: Name of type
-    :return: Type if found, else None
-    """
-    type_str, type_candidates = find_data_types(type_str)
+    type_candidates = remote_find_data_types(type_str)
 
     if len(type_candidates) == 1:
         return type_str, type_candidates[0]
@@ -268,9 +264,9 @@ def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
         if id_token and id_token.kind == TokenKind.IDENTIFIER:
             struct_type_name = id_token.spelling
 
-        candidates = find_data_types(struct_type_name)
+        struct_type_name, existing_type = find_data_type(struct_type_name)
 
-        if len(candidates) == 1:
+        if existing_type is not None:
             logger.debug(f"- Found existing type {struct_type_name}")
             return
 
@@ -290,15 +286,11 @@ def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
     for child in struct_cursor.get_children():
         match child.kind:
             case CursorKind.FIELD_DECL:
-                # pointer = child.type.kind in (TypeKind.POINTER, TypeKind.OBJCOBJECTPOINTER)
-
                 type_name, field_type = find_data_type(child.type.spelling)
                 if field_type is None:
-                    logger.debug(f"- Need to resolve field type {type_name}"
-                                 # f" ({pointer=})"
-                                 )
+                    logger.debug(f"- Need to resolve field type {type_name}")
                     dependency = dependencies.setdefault(type_name, {
-                        "ptr_level": type_name.count("*"),
+                        "ptr_level": type_name.count("*"),  # TODO: Revisit
                         "vars": []
                     })
                     dependency["vars"].append(child.displayname)
@@ -306,7 +298,6 @@ def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
                 variables[child.displayname] = {
                     "type_name": type_name,
                     "type": field_type,
-                    # "pointer": pointer,
                 }
 
     if pack:
@@ -387,6 +378,14 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
 
             case CursorKind.STRUCT_DECL:
                 parse_struct(instance_cursor, category, pack)
+
+            case CursorKind.OBJC_CLASS_METHOD_DECL:
+                # TODO: Implement?
+                pass
+
+            case CursorKind.UNION_DECL:
+                # TODO: Implement?
+                pass
 
             case other:
                 logger.warning(f"Unsupported cursor kind {other}")
@@ -477,30 +476,22 @@ def push_structs(pack, base_category, progress):
                     params = []
 
                     for param_name, param in method["params"].items():
-                        param_type_candidates = find_data_types(param["type"])
+                        _, param_type = find_data_type(param["type"])
 
-                        if len(param_type_candidates) == 1:
+                        if param_type is not None:
                             params.append(ParameterImpl(
                                 param_name,
-                                param_type_candidates[0],
+                                param_type,
                                 prog,
                             ))
 
-                    return_type_candidates = find_data_types(method["rtype"])
-                    return_type = None
-                    if len(return_type_candidates) == 1:
-                        return_type = return_type_candidates[0]
+                    _, return_type = find_data_type(method["rtype"])
+                    if return_type is None:
+                        logger.error(f"- Failed to resolve return data type {method['rtype']}")
 
+                    else:
                         if method["rtype_pointer"]:
                             return_type = dt_man.getPointer(return_type)
-                    else:
-                        for candidate in return_type_candidates:
-                            if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
-                                return_type = candidate
-                                break
-
-                        if return_type is None:
-                            logger.error(f"- Failed to resolve return data type {method['rtype']}")
 
                     func = func_man.getFunction(symbol.getID())
                     func.updateFunction(
