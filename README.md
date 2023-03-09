@@ -7,9 +7,12 @@ Currently supports the following data:
 * Identified interfaces are defined as structs, with their fields set accordingly (names and types)
 * Instance method parameters (names and types) are set as well. `__thiscall` convention will be set.
 
-When unknown types are encountered for the first time they are inserted into the Ghidra DB as an empty struct.
+The loading process happens in 3 stages:
+1. Parse stage: Code is parsed and any type references are resolved. If a type isn't resolvable then it is marked as a "dependency". This helps resolve references to types that haven't been parsed yet.
+2. Dependency resolution stage: After all headers are parsed then dependency are resolved. Any dependencies which are still unresolvable are represented as empty structs.
+3. Data pushing stage: Complete data is pushed to the Ghidra database. This data will be placed in a predefined category for easy management.
 
-The parsed data is inserted over a bridge implemented with [`ghidra-bridge`](https://github.com/justfoxing/ghidra_bridge) so it may be run in any Python 3 interpreter, however requires the Python 2 server be running within Ghidra.
+The parsed data is pushed over a bridge implemented with [`ghidra-bridge`](https://github.com/justfoxing/ghidra_bridge) so it may be run in any Python 3 interpreter, however requires the Python 2 server be running within Ghidra.
 
 ## Usage
 

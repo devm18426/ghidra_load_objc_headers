@@ -238,17 +238,6 @@ def parse_method(methods: dict[str, dict], method_cursor: Cursor):
             "type": arg.type.spelling,
         }
 
-    pass
-    # children: list[Cursor] = list(method_cursor.get_children())
-    # for child in children:
-    #     match child.kind:
-    #         case CursorKind.OBJC_PROTOCOL_REF:
-    #             # TODO: Figure this out
-    #             pass
-    #
-    #         case other:
-    #             logger.debug(f"- Unhandled cursor kind {child.kind} (method {method_name})")
-
 
 def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
     struct_type_name, struct_type = find_data_type(struct_cursor.type.spelling)
@@ -338,8 +327,6 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
                 logger.debug(f"Parsing var {instance_cursor.displayname}")
                 type_name, variable_type, variable_name = \
                     parse_instance_variable(instance_cursor)
-
-                # logger.debug(f"{instance_cursor.objc_type_encoding} - {variable_name}")
 
                 if variable_type is None:
                     logger.debug(f"- Need to resolve {type_name}")
