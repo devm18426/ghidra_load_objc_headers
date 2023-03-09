@@ -1,0 +1,66 @@
+{
+    "_meta": {
+        "hash": {
+            "sha256": "4d857193861751c7549f520ba997aef48be4e9590a99404ab666af349d6d4173"
+        },
+        "pipfile-spec": 6,
+        "requires": {
+            "python_version": "3.10"
+        },
+        "sources": [
+            {
+                "name": "pypi",
+                "url": "https://pypi.org/simple",
+                "verify_ssl": true
+            }
+        ]
+    },
+    "default": {
+        "colorama": {
+            "hashes": [
+                "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44",
+                "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"
+            ],
+            "markers": "platform_system == 'Windows'",
+            "version": "==0.4.6"
+        },
+        "ghidra-bridge": {
+            "hashes": [
+                "sha256:3a7bdf9c8c1dc78acd3e8cfe9649d0e9554e47e147435730104efee634b01c9d",
+                "sha256:d73d363b99ad893b04dcae4455120b7b44f83899fde14194fcf476cd1656141e"
+            ],
+            "index": "pypi",
+            "version": "==1.0.0"
+        },
+        "jfx-bridge": {
+            "hashes": [
+                "sha256:c7beda4776e219fdca60c42cbce31a97df392c164474c9b5420ed033f346ad30",
+                "sha256:e291b51f510bd2587619434f94c89f0c805936c492924c0d905e9222fa290729"
+            ],
+            "version": "==1.0.0"
+        },
+        "libclang": {
+            "hashes": [
+                "sha256:4a5188184b937132c198ee9de9a8a2316d5fdd1a825398d5ad1a8f5e06f9b40e",
+                "sha256:687d8549c110c700fece58dd87727421d0710fdd111aa7eecb01faf8e3f50d4e",
+                "sha256:69b01a23ab543908a661532595daa23cf88bd96d80e41f58ba0eaa6a378fe0d8",
+                "sha256:85afb47630d2070e74b886040ceea1846097ca53cc88d0f1d7751d0f49220028",
+                "sha256:8621795e07b87e17fc7aac9f071bc7fe6b52ed6110c0a96a9975d8113c8c2527",
+                "sha256:a1a8fe038af2962c787c5bac81bfa4b82bb8e279e61e70cc934c10f6e20c73ec",
+                "sha256:aaebb6aa1db73bac3a0ac41e57ef78743079eb68728adbf7e80ee917ae171529",
+                "sha256:f7ffa02ac5e586cfffde039dcccc439d88d0feac7d77bf9426d9ba7543d16545"
+            ],
+            "index": "pypi",
+            "version": "==15.0.6.1"
+        },
+        "tqdm": {
+            "hashes": [
+                "sha256:5f4f682a004951c1b450bc753c710e9280c5746ce6ffedee253ddbcbf54cf1e4",
+                "sha256:6fee160d6ffcd1b1c68c65f14c829c22832bc401726335ce92c52d395944a6a1"
+            ],
+            "index": "pypi",
+            "version": "==4.64.1"
+        }
+    },
+    "develop": {}
+}
