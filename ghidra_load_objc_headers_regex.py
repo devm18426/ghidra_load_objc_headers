@@ -51,6 +51,9 @@ def findDataTypes(type_str):
     return candidates
 
 
+findDataTypes = b.remoteify(findDataTypes)
+
+
 def resolve_data_type(type_name, field_name=None) -> Optional[DataType]:
     if "^block" in type_name:
         # TODO: Consider implementing full Block_literal struct
@@ -288,7 +291,5 @@ if __name__ == "__main__":
     dt_man = prog.getDataTypeManager()
     func_man = prog.getFunctionManager()
     func_tag_man = func_man.getFunctionTagManager()
-
-    findDataTypes = b.remoteify(findDataTypes)
 
     main(**args.__dict__)
