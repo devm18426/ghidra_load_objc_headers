@@ -22,7 +22,7 @@ else:
 
 from ghidra.program.model.data import StructureDataType, DataType, CategoryPath, DataTypeConflictHandler, Category, \
     CharDataType, ArchiveType, IntegerDataType, UnsignedIntegerDataType, ShortDataType, UnsignedLongLongDataType, \
-    UnsignedShortDataType, LongDataType, UnsignedLongDataType, LongLongDataType
+    UnsignedShortDataType, LongDataType, UnsignedLongDataType, LongLongDataType, ArrayDataType
 from ghidra.program.model.symbol import SymbolType, SourceType
 from ghidra.program.model.listing import Function, ParameterImpl, ReturnParameterImpl
 
@@ -46,39 +46,43 @@ class GhidraTransaction:
 STRUCTS: dict[str, dict] = {}
 
 
-def find_data_types(type_str):
+def remote_find_data_types(type_str):
     candidates = []
     currentProgram.getDataTypeManager().findDataTypes(type_str, candidates)
     return candidates
 
 
-find_data_types = b.remoteify(find_data_types)
+remote_find_data_types = b.remoteify(remote_find_data_types)
 
 
-def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str, typing.Optional[DataType], str]:
-    var_name = var_cursor.displayname
+def find_data_types(type_str):
+    return remote_find_data_types(type_str)
 
-    type_name: str = var_cursor.type.spelling.removeprefix("struct ")
+
+def find_data_types_one_or_none(type_str):
+    type_candidates = remote_find_data_types(type_str)
+
+    if len(type_candidates) == 1:
+        return type_candidates[0]
+
+    for candidate in type_candidates:
+        if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
+            return candidate
+
+
+def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
     variable_type: DataType | None = None
+    type_name: str = data_type.spelling.removeprefix("struct ")
 
-    match typing.cast(Type, var_cursor.type).kind:
+    match data_type.kind:
         case TypeKind.OBJCOBJECTPOINTER:
             # Unpointered name
-            type_name = typing.cast(Cursor, next(var_cursor.get_children())).displayname
+            type_name = data_type.get_pointee().spelling
             logger.debug(f"- Pointer to {type_name}")
 
-            variable_type = category.getDataType(type_name)
-
-            if var_name == "":
-                logger.error(f"- Missing pointer variable name (possible libclang issue). Returning placeholder")
-                logger.error(
-                    f"- {var_cursor.location.file.name}:{var_cursor.location.line}:{var_cursor.location.column}"
-                )
-
-                var_name = f"MISSING_PTR_NAME_{var_cursor.hash}"
-
+            variable_type = find_data_types_one_or_none(type_name)
             if variable_type is None:
-                logger.debug(f"- Creating empty struct {type_name}")
+                logger.error(f"- Failed to resolve data type {type_name}")
 
         case TypeKind.CHAR_S:
             variable_type = CharDataType()
@@ -107,6 +111,16 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
         case TypeKind.USHORT:
             variable_type = UnsignedShortDataType()
 
+        case TypeKind.CONSTANTARRAY:
+            element_type = var_cursor.type.get_array_element_type()
+            element_type_name, ghidra_element_type = clang_to_ghidra_type(element_type)
+
+            variable_type = ArrayDataType(
+                ghidra_element_type,
+                var_cursor.type.element_count,
+                element_type.get_size()
+            )
+
         case TypeKind.ATOMIC:
             atomic_tokens = var_cursor.get_tokens()
 
@@ -115,18 +129,9 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
             if id_token and id_token.kind in (TokenKind.IDENTIFIER, TokenKind.KEYWORD):
                 type_name = id_token.spelling
 
-            type_candidates = find_data_types(type_name)
-
-            if len(type_candidates) == 1:
-                variable_type = type_candidates[0]
-            else:
-                for candidate in type_candidates:
-                    if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
-                        variable_type = candidate
-                        break
-
-                if variable_type is None:
-                    logger.error(f"- Failed to resolve atomic data type {type_name}")
+            variable_type = find_data_types_one_or_none(type_name)
+            if variable_type is None:
+                logger.error(f"- Failed to resolve atomic data type {type_name}")
 
         case TypeKind.POINTER:
             if "unnamed struct" in type_name:
@@ -138,13 +143,17 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
                     if (id_token := next(struct_decl_tokens, None)) and id_token.kind == TokenKind.IDENTIFIER:
                         type_name = id_token.spelling
 
-            type_candidates = find_data_types(type_name)
+            level = 1
+            pointee: Type = data_type
+            while (pointee := pointee.get_pointee()).kind == TypeKind.POINTER:
+                level += 1
 
-            if len(type_candidates) == 1:
-                variable_type = type_candidates[0]
+            variable_type = find_data_types_one_or_none(pointee.spelling)
+            if variable_type is None:
+                logger.debug(f"- Could not resolve pointer type {type_name}")
 
-            else:
-                logger.debug(f"- Got {len(type_candidates)} type candidates for type name {var_cursor.type.spelling}")
+            for i in range(level):
+                variable_type = dt_man.getPointer(variable_type)
 
         case TypeKind.ELABORATED:
             # Inline struct declaration, etc.
@@ -157,32 +166,32 @@ def parse_instance_variable(var_cursor: Cursor, category: Category) -> tuple[str
                 if id_token and id_token.kind == TokenKind.IDENTIFIER:
                     type_name = id_token.spelling
 
-            type_candidates = find_data_types(type_name)
-
-            if len(type_candidates) == 1:
-                variable_type = type_candidates[0]
-            else:
-                for candidate in type_candidates:
-                    if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
-                        variable_type = candidate
-                        break
-
-                if variable_type is None:
-                    logger.error(f"- Failed to resolve data type {type_name}")
+            variable_type = find_data_types_one_or_none(type_name)
+            if variable_type is None:
+                logger.error(f"- Failed to resolve data type {type_name}")
 
         case other:
-            type_candidates = find_data_types(type_name)
+            variable_type = find_data_types_one_or_none(type_name)
+            if variable_type is None:
+                logger.error(f"- Failed to resolve data type {type_name}")
 
-            if len(type_candidates) == 1:
-                variable_type = type_candidates[0]
-            else:
-                for candidate in type_candidates:
-                    if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
-                        variable_type = candidate
-                        break
+    return type_name, variable_type
 
-                if variable_type is None:
-                    logger.error(f"- Failed to resolve data type {type_name}")
+
+def parse_instance_variable(var_cursor: Cursor = None) ->\
+        tuple[str, typing.Optional[DataType], str]:
+    var_name = var_cursor.displayname
+
+    type_name, variable_type = clang_to_ghidra_type(var_cursor.type, var_cursor)
+
+    if var_name == "" and var_cursor is not None:
+        # TODO: Probably related to type protocol declaration
+        logger.error(f"- Missing pointer variable name (possible libclang issue). Returning placeholder")
+        logger.error(
+            f"- {var_cursor.location.file.name}:{var_cursor.location.line}:{var_cursor.location.column}"
+        )
+
+        var_name = f"MISSING_PTR_NAME_{var_cursor.hash}"
 
     return type_name, variable_type, var_name
 
@@ -306,8 +315,9 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
                     logger.debug(f"Skipping var {instance_cursor.displayname}")
                     continue
 
+                logger.debug(f"Parsing var {instance_cursor.displayname}")
                 type_name, variable_type, variable_name = \
-                    parse_instance_variable(instance_cursor, category)
+                    parse_instance_variable(instance_cursor)
 
                 # logger.debug(f"{instance_cursor.objc_type_encoding} - {variable_name}")
 
