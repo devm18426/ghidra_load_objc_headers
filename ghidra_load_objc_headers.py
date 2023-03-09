@@ -59,30 +59,37 @@ def remote_find_data_types(type_str):
 remote_find_data_types = b.remoteify(remote_find_data_types)
 
 
-def find_data_types(type_str):
+def find_data_types(type_str) -> tuple[str, list[DataType]]:
     if type_str == "unsigned":
         type_str = "unsigned int"
 
-    return remote_find_data_types(type_str)
+    else:
+        type_str = type_str.removeprefix("const ")
+        type_str = type_str.removeprefix("_Atomic(").removesuffix(")")
+        type_str = type_str.removeprefix("struct ")
+
+    return type_str, remote_find_data_types(type_str)
 
 
-def find_data_type(type_str) -> DataType | None:
+def find_data_type(type_str) -> tuple[str, DataType | None]:
     """
     Search Ghidra for data type that corresponds to type_str.
     :param type_str: Name of type
     :return: Type if found, else None
     """
-    type_candidates = find_data_types(type_str)
+    type_str, type_candidates = find_data_types(type_str)
 
     if len(type_candidates) == 1:
-        return type_candidates[0]
+        return type_str, type_candidates[0]
 
     for candidate in type_candidates:
         if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
-            return candidate
+            return type_str, candidate
+
+    return type_str, None
 
 
-def parse_pointer(data_type: Type, pointer_kind: TypeKind):
+def parse_pointer(data_type: Type, pointer_kind: TypeKind) -> tuple[str, DataType | None]:
     level = 1
     pointee = data_type
     try:
@@ -90,11 +97,6 @@ def parse_pointer(data_type: Type, pointer_kind: TypeKind):
             level += 1
 
         type_name = pointee.spelling
-
-        if pointee.kind == TypeKind.ATOMIC:
-            type_name = type_name.removeprefix("_Atomic(").removesuffix(")")
-
-        type_name = type_name.removeprefix("struct ")
 
     except ValueError as e:
         # TODO: Probably caused by protocol type
@@ -104,21 +106,21 @@ def parse_pointer(data_type: Type, pointer_kind: TypeKind):
         match = re.match(r"(?P<type_name>.+?)<.+?>", pointee.spelling)
         type_name = match.groupdict().get("type_name")
 
-    variable_type = find_data_type(type_name)
+    type_name, variable_type = find_data_type(type_name)
     if variable_type is not None:
         for i in range(level):
             variable_type = dt_man.getPointer(variable_type)
 
-    return variable_type
+    return type_name, variable_type
 
 
 def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
     variable_type: DataType | None
-    type_name: str = data_type.spelling.removeprefix("struct ").removeprefix("const ")
+    type_name: str = data_type.spelling
 
     match data_type.kind:
         case TypeKind.OBJCOBJECTPOINTER:
-            variable_type = parse_pointer(data_type, TypeKind.OBJCOBJECTPOINTER)
+            type_name, variable_type = parse_pointer(data_type, TypeKind.OBJCOBJECTPOINTER)
             if variable_type is None:
                 logger.debug(f"- Could not resolve OBJC pointer type {type_name}")
 
@@ -167,7 +169,7 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
             if id_token and id_token.kind in (TokenKind.IDENTIFIER, TokenKind.KEYWORD):
                 type_name = id_token.spelling
 
-            variable_type = find_data_type(type_name)
+            type_name, variable_type = find_data_type(type_name)
             if variable_type is None:
                 logger.error(f"- Failed to resolve atomic data type {type_name}")
 
@@ -181,7 +183,7 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
                     if (id_token := next(struct_decl_tokens, None)) and id_token.kind == TokenKind.IDENTIFIER:
                         type_name = id_token.spelling
 
-            variable_type = parse_pointer(data_type, TypeKind.POINTER)
+            type_name, variable_type = parse_pointer(data_type, TypeKind.POINTER)
             if variable_type is None:
                 logger.debug(f"- Could not resolve pointer type {type_name}")
 
@@ -196,14 +198,14 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
                 if id_token and id_token.kind == TokenKind.IDENTIFIER:
                     type_name = id_token.spelling
 
-            variable_type = find_data_type(type_name)
+            type_name, variable_type = find_data_type(type_name)
             if variable_type is None:
                 logger.error(f"- Failed to resolve data type {type_name}")
 
         case other:
             logger.debug(f"- Got unhandled type kind {other}")
 
-            variable_type = find_data_type(type_name)
+            type_name, variable_type = find_data_type(type_name)
             if variable_type is None:
                 logger.error(f"- Failed to resolve data type {type_name}")
 
@@ -253,35 +255,31 @@ def parse_method(methods: dict[str, dict], method_cursor: Cursor):
 
 
 def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
-    struct_type_name = struct_cursor.type.spelling.removeprefix("struct ").removeprefix("const ")
-
-    candidates = find_data_types(struct_type_name)
-
-    if len(candidates) == 1:
+    struct_type_name, struct_type = find_data_type(struct_cursor.type.spelling)
+    if struct_type is not None:
         # TODO: Consider parsing anyways
         logger.debug(f"- Found existing type {struct_type_name}")
         return
 
-    else:
-        if struct_type_name.startswith("(unnamed "):
-            tokens = struct_cursor.get_tokens()
-            next(tokens, None)  # Should be TokenKind.KEYWORD, spelling="struct"
-            id_token = next(tokens, None)
-            if id_token and id_token.kind == TokenKind.IDENTIFIER:
-                struct_type_name = id_token.spelling
+    if struct_type_name.startswith("(unnamed "):
+        tokens = struct_cursor.get_tokens()
+        next(tokens, None)  # Should be TokenKind.KEYWORD, spelling="struct"
+        id_token = next(tokens, None)
+        if id_token and id_token.kind == TokenKind.IDENTIFIER:
+            struct_type_name = id_token.spelling
 
-            candidates = find_data_types(struct_type_name)
+        candidates = find_data_types(struct_type_name)
 
-            if len(candidates) == 1:
-                logger.debug(f"- Found existing type {struct_type_name}")
-                return
+        if len(candidates) == 1:
+            logger.debug(f"- Found existing type {struct_type_name}")
+            return
 
-        with GhidraTransaction():
-            data_type = StructureDataType(category.getCategoryPath(), struct_type_name, 0)
+    with GhidraTransaction():
+        data_type = StructureDataType(category.getCategoryPath(), struct_type_name, 0)
 
-            logger.debug(f"- Pushing {struct_type_name} to {category}")
+        logger.debug(f"- Pushing {struct_type_name} to {category}")
 
-            data_type = category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
+        data_type = category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
 
     struct = STRUCTS.setdefault(struct_type_name, {})
     variables = struct.setdefault("vars", OrderedDict())
@@ -292,28 +290,23 @@ def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
     for child in struct_cursor.get_children():
         match child.kind:
             case CursorKind.FIELD_DECL:
-                field_type = None
-                pointer = False
+                # pointer = child.type.kind in (TypeKind.POINTER, TypeKind.OBJCOBJECTPOINTER)
 
-                field_type_candidates = find_data_types(child.type.spelling)
-                if len(field_type_candidates) == 1:
-                    field_type = field_type_candidates[0]
-
-                else:
-                    for candidate in field_type_candidates:
-                        if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
-                            field_type = candidate
-                            break
-
-                    if field_type is None:
-                        logger.debug(f"- Need to resolve field type {child.type.spelling} ({pointer=})")
-                        dependency = dependencies.setdefault(child.type.spelling, [])
-                        dependency.append(child.displayname)
+                type_name, field_type = find_data_type(child.type.spelling)
+                if field_type is None:
+                    logger.debug(f"- Need to resolve field type {type_name}"
+                                 # f" ({pointer=})"
+                                 )
+                    dependency = dependencies.setdefault(type_name, {
+                        "ptr_level": type_name.count("*"),
+                        "vars": []
+                    })
+                    dependency["vars"].append(child.displayname)
 
                 variables[child.displayname] = {
-                    "type_name": child.type.spelling,
+                    "type_name": type_name,
                     "type": field_type,
-                    "pointer": pointer,
+                    # "pointer": pointer,
                 }
 
     if pack:
@@ -322,7 +315,7 @@ def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
 
 
 def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=False, skip_methods=False):
-    if data_type := find_data_type(cursor.displayname):
+    if data_type := find_data_type(cursor.displayname)[1]:
         logger.debug(f"- Found existing type {cursor.displayname}")
 
         if not isinstance(data_type, StructureDB):
@@ -359,8 +352,11 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
 
                 if variable_type is None:
                     logger.debug(f"- Need to resolve {type_name}")
-                    dependency = dependencies.setdefault(type_name, [])
-                    dependency.append(variable_name)
+                    dependency = dependencies.setdefault(type_name, {
+                        "ptr_level": type_name.count("*"),
+                        "vars": []
+                    })
+                    dependency["vars"].append(variable_name)
 
                 variables[variable_name] = {
                     "type_name": type_name,
@@ -419,15 +415,22 @@ def push_structs(pack, base_category, progress):
             if progress:
                 iiterator = tqdm(iiterator, leave=False, unit="dep", desc=f"Processing {type_name}")
 
-            for dep, variables in iiterator:
-                data_type = find_data_type(dep)
+            for dep, dep_info in iiterator:
+                data_type = find_data_type(dep)[1]
 
                 if data_type is None:
-                    logger.debug(f"- Creating empty uncategorized struct {dep} while parsing {type_name}")
+                    name = dep
+                    if dep_info["ptr_level"] > 0:
+                        name = type_name.rstrip("*")
 
-                    data_type = StructureDataType(uncategorized_category.getCategoryPath(), dep, 0)
+                    logger.debug(f"- Creating empty uncategorized struct {name} while parsing {type_name}")
 
-                for variable in variables:
+                    data_type = StructureDataType(uncategorized_category.getCategoryPath(), name, 0)
+
+                    for i in range(dep_info["ptr_level"]):
+                        data_type = dt_man.getPointer(data_type)
+
+                for variable in dep_info["vars"]:
                     struct["vars"][variable]["type"] = data_type
 
         # Second pass: Struct population
