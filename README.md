@@ -1,17 +1,13 @@
 # ghidra_load_objc_headers
 Rough script to load Objective-C header data into Ghidra.
 
-The Objective-C headers are "parsed" using RegEx and relevant data is inserted into the Ghidra database.
+The Objective-C headers are parsed using the [clang python bindings](https://github.com/llvm/llvm-project/tree/main/clang/bindings/python) and relevant data is inserted into the Ghidra database.
 
 Currently supports the following data:
 * Identified interfaces are defined as structs, with their fields set accordingly (names and types)
 * Instance method parameters (names and types) are set as well. `__thiscall` convention will be set.
 
 When unknown types are encountered for the first time they are inserted into the Ghidra DB as an empty struct.
-
-When pointers to unknown types are encountered they are inserted as `void *` with comments documenting their original type.
-
-When [Blocks](https://www.cocoawithlove.com/2009/10/how-blocks-are-implemented-and.html) are encountered they are inserted with type `Block_literal *`, where `Block_literal` is an empty struct.
 
 The parsed data is inserted over a bridge implemented with [`ghidra-bridge`](https://github.com/justfoxing/ghidra_bridge) so it may be run in any Python 3 interpreter, however requires the Python 2 server be running within Ghidra.
 
@@ -58,7 +54,5 @@ options:
   ```
   
 ## Known Issues
-* Complex field types (e.g. in-place struct definitions) are not handled.
-* Self-dependencies are not resolved. Run twice on the same folder for best results.
 * Protocol definitions in data type literals are ignored (e.g. `NSObject<NSCoding, UITableViewDelegate>` will resolve simply to `NSObject`).
 * Properties are ignored.
