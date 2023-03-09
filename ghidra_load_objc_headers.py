@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import typing
 from argparse import ArgumentParser, RawTextHelpFormatter
@@ -78,19 +79,39 @@ def find_data_type(type_str) -> DataType | None:
             return candidate
 
 
+def parse_pointer(data_type: Type, pointer_kind: TypeKind):
+    level = 1
+    pointee = data_type
+    try:
+        while (pointee := pointee.get_pointee()).kind == pointer_kind:
+            level += 1
+
+        type_name = pointee.spelling
+    except ValueError as e:
+        # TODO: Probably caused by protocol type
+        logger.warning(f"Couldn't resolve pointee kind: {e} (possible libclang issue). "
+                       f"Assuming pointee is not a pointer")
+
+        match = re.match(r"(?P<type_name>.+?)<.+?>", pointee.spelling)
+        type_name = match.groupdict().get("type_name")
+
+    variable_type = find_data_type(type_name)
+    if variable_type is not None:
+        for i in range(level):
+            variable_type = dt_man.getPointer(variable_type)
+
+    return variable_type
+
+
 def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
     variable_type: DataType | None
     type_name: str = data_type.spelling.removeprefix("struct ")
 
     match data_type.kind:
         case TypeKind.OBJCOBJECTPOINTER:
-            # Unpointered name
-            type_name = data_type.get_pointee().spelling
-            logger.debug(f"- Pointer to {type_name}")
-
-            variable_type = find_data_type(type_name)
+            variable_type = parse_pointer(data_type, TypeKind.OBJCOBJECTPOINTER)
             if variable_type is None:
-                logger.error(f"- Failed to resolve data type {type_name}")
+                logger.debug(f"- Could not resolve OBJC pointer type {type_name}")
 
         case TypeKind.CHAR_S:
             variable_type = CharDataType()
@@ -151,17 +172,9 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
                     if (id_token := next(struct_decl_tokens, None)) and id_token.kind == TokenKind.IDENTIFIER:
                         type_name = id_token.spelling
 
-            level = 1
-            pointee: Type = data_type
-            while (pointee := pointee.get_pointee()).kind == TypeKind.POINTER:
-                level += 1
-
-            variable_type = find_data_type(pointee.spelling)
+            variable_type = parse_pointer(data_type, TypeKind.POINTER)
             if variable_type is None:
                 logger.debug(f"- Could not resolve pointer type {type_name}")
-
-            for i in range(level):
-                variable_type = dt_man.getPointer(variable_type)
 
         case TypeKind.ELABORATED:
             # Inline struct declaration, etc.
@@ -179,6 +192,8 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
                 logger.error(f"- Failed to resolve data type {type_name}")
 
         case other:
+            logger.debug(f"- Got unhandled type kind {other}")
+
             variable_type = find_data_type(type_name)
             if variable_type is None:
                 logger.error(f"- Failed to resolve data type {type_name}")
@@ -298,11 +313,6 @@ def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
 
 
 def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=False, skip_methods=False):
-    struct = STRUCTS.setdefault(cursor.displayname, {})
-    variables = struct.setdefault("vars", OrderedDict())
-    methods = struct.setdefault("methods", {})
-    dependencies = struct.setdefault("deps", {})
-
     if data_type := find_data_type(cursor.displayname):
         logger.debug(f"- Found existing type {cursor.displayname}")
 
@@ -316,6 +326,11 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
 
             logger.debug(f"- Pushing {cursor.displayname} to {category}")
             data_type = category.addDataType(data_type, DataTypeConflictHandler.KEEP_HANDLER)
+
+    struct = STRUCTS.setdefault(cursor.displayname, {})
+    variables = struct.setdefault("vars", OrderedDict())
+    methods = struct.setdefault("methods", {})
+    dependencies = struct.setdefault("deps", {})
 
     struct["type"] = data_type
 
@@ -536,7 +551,7 @@ def main(headers: Iterator, pack: bool, progress: bool, skip_vars: bool, skip_me
             match child.kind:
                 case CursorKind.OBJC_INTERFACE_DECL:
                     type_name = child.displayname
-                    logger.info(f"Parsing {type_name}")
+                    logger.info(f"Parsing interface {type_name}")
                     parse_interface(child, category, pack, skip_vars=skip_vars, skip_methods=skip_methods)
 
     push_structs(pack, base_category, progress)
@@ -606,17 +621,14 @@ if __name__ == "__main__":
     args = parser.parse_args().__dict__
 
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setFormatter(logging.Formatter("[%(levelname)-7s] %(message)s"))
 
     verbosity = args.pop("verbosity")
     if verbosity > 0:
         logger.setLevel(DEBUG)
 
         if verbosity == 1:
-            handler.setFormatter(logging.Formatter("[%(levelname)-7s] %(message)s"))
-
-        if verbosity == 2:
-            handler.setFormatter(logging.Formatter("[%(levelname)-5s][%(filename)s:%(lineno)d] %(message)s"))
+            handler.setFormatter(logging.Formatter("[%(levelname)-7s][%(filename)s:%(lineno)d] %(message)s"))
 
     else:
         logger.setLevel(INFO)
