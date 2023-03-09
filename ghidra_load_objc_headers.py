@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import sys
 import typing
@@ -20,6 +22,7 @@ else:
 
     b = ghidra_bridge.GhidraBridge(namespace=globals(), hook_import=True)
 
+from ghidra.program.database.data import StructureDB
 from ghidra.program.model.data import StructureDataType, DataType, CategoryPath, DataTypeConflictHandler, Category, \
     CharDataType, ArchiveType, IntegerDataType, UnsignedIntegerDataType, ShortDataType, UnsignedLongLongDataType, \
     UnsignedShortDataType, LongDataType, UnsignedLongDataType, LongLongDataType, ArrayDataType
@@ -59,8 +62,13 @@ def find_data_types(type_str):
     return remote_find_data_types(type_str)
 
 
-def find_data_types_one_or_none(type_str):
-    type_candidates = remote_find_data_types(type_str)
+def find_data_type(type_str) -> DataType | None:
+    """
+    Search Ghidra for data type that corresponds to type_str.
+    :param type_str: Name of type
+    :return: Type if found, else None
+    """
+    type_candidates = find_data_types(type_str)
 
     if len(type_candidates) == 1:
         return type_candidates[0]
@@ -71,7 +79,7 @@ def find_data_types_one_or_none(type_str):
 
 
 def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
-    variable_type: DataType | None = None
+    variable_type: DataType | None
     type_name: str = data_type.spelling.removeprefix("struct ")
 
     match data_type.kind:
@@ -80,7 +88,7 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
             type_name = data_type.get_pointee().spelling
             logger.debug(f"- Pointer to {type_name}")
 
-            variable_type = find_data_types_one_or_none(type_name)
+            variable_type = find_data_type(type_name)
             if variable_type is None:
                 logger.error(f"- Failed to resolve data type {type_name}")
 
@@ -112,12 +120,12 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
             variable_type = UnsignedShortDataType()
 
         case TypeKind.CONSTANTARRAY:
-            element_type = var_cursor.type.get_array_element_type()
+            element_type = data_type.get_array_element_type()
             element_type_name, ghidra_element_type = clang_to_ghidra_type(element_type)
 
             variable_type = ArrayDataType(
                 ghidra_element_type,
-                var_cursor.type.element_count,
+                data_type.element_count,
                 element_type.get_size()
             )
 
@@ -129,7 +137,7 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
             if id_token and id_token.kind in (TokenKind.IDENTIFIER, TokenKind.KEYWORD):
                 type_name = id_token.spelling
 
-            variable_type = find_data_types_one_or_none(type_name)
+            variable_type = find_data_type(type_name)
             if variable_type is None:
                 logger.error(f"- Failed to resolve atomic data type {type_name}")
 
@@ -148,7 +156,7 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
             while (pointee := pointee.get_pointee()).kind == TypeKind.POINTER:
                 level += 1
 
-            variable_type = find_data_types_one_or_none(pointee.spelling)
+            variable_type = find_data_type(pointee.spelling)
             if variable_type is None:
                 logger.debug(f"- Could not resolve pointer type {type_name}")
 
@@ -166,12 +174,12 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
                 if id_token and id_token.kind == TokenKind.IDENTIFIER:
                     type_name = id_token.spelling
 
-            variable_type = find_data_types_one_or_none(type_name)
+            variable_type = find_data_type(type_name)
             if variable_type is None:
                 logger.error(f"- Failed to resolve data type {type_name}")
 
         case other:
-            variable_type = find_data_types_one_or_none(type_name)
+            variable_type = find_data_type(type_name)
             if variable_type is None:
                 logger.error(f"- Failed to resolve data type {type_name}")
 
@@ -295,9 +303,13 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
     methods = struct.setdefault("methods", {})
     dependencies = struct.setdefault("deps", {})
 
-    if len(candidates := find_data_types(cursor.displayname)) == 1:
+    if data_type := find_data_type(cursor.displayname):
         logger.debug(f"- Found existing type {cursor.displayname}")
-        data_type: StructureDataType = candidates[0]
+
+        if not isinstance(data_type, StructureDB):
+            logger.debug(f"- Existing type is {data_type}, skipping")
+            return
+
     else:
         with GhidraTransaction():
             data_type = StructureDataType(category.getCategoryPath(), cursor.displayname, 0)
@@ -601,7 +613,7 @@ if __name__ == "__main__":
         logger.setLevel(DEBUG)
 
         if verbosity == 1:
-            handler.setFormatter(logging.Formatter("[%(levelname)-5s] %(message)s"))
+            handler.setFormatter(logging.Formatter("[%(levelname)-7s] %(message)s"))
 
         if verbosity == 2:
             handler.setFormatter(logging.Formatter("[%(levelname)-5s][%(filename)s:%(lineno)d] %(message)s"))
