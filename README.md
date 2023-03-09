@@ -44,11 +44,17 @@ usage: ghidra_load_objc_headers.py [-h] [--disable-packing] headers_path
 Load Objective-C header data into Ghidra
 
 positional arguments:
-  headers_path  Path to single header file or directory containing headers
+  headers               Path to header files (globs supported)
 
 options:
-  -h, --help    show this help message and exit
-  --disable-packing  Disable struct packing (Default: Enabled)
+  -h, --help            show this help message and exit
+  --disable-packing     Disable struct packing (Default: Enabled)
+  -v, --verbose         Set logging verbosity (Default: Least verbosity)
+  --no-prog             Disable progress bars (Default: Enabled)
+  --skip-vars           Enable skipping of instance variable parsing (Default: Disabled)
+  --skip-methods        Enable skipping of class method parsing (Default: Disabled)
+  -c BASE_CATEGORY, --base-category BASE_CATEGORY
+                        Base category path for all loaded types (Default: objc_loader)
   ```
   
 ## Known Issues
