@@ -90,6 +90,12 @@ def parse_pointer(data_type: Type, pointer_kind: TypeKind):
             level += 1
 
         type_name = pointee.spelling
+
+        if pointee.kind == TypeKind.ATOMIC:
+            type_name = type_name.removeprefix("_Atomic(").removesuffix(")")
+
+        type_name = type_name.removeprefix("struct ")
+
     except ValueError as e:
         # TODO: Probably caused by protocol type
         logger.warning(f"Couldn't resolve pointee kind: {e} (possible libclang issue). "
@@ -108,7 +114,7 @@ def parse_pointer(data_type: Type, pointer_kind: TypeKind):
 
 def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
     variable_type: DataType | None
-    type_name: str = data_type.spelling.removeprefix("struct ")
+    type_name: str = data_type.spelling.removeprefix("struct ").removeprefix("const ")
 
     match data_type.kind:
         case TypeKind.OBJCOBJECTPOINTER:
@@ -247,7 +253,7 @@ def parse_method(methods: dict[str, dict], method_cursor: Cursor):
 
 
 def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
-    struct_type_name = struct_cursor.type.spelling.removeprefix("struct ")
+    struct_type_name = struct_cursor.type.spelling.removeprefix("struct ").removeprefix("const ")
 
     candidates = find_data_types(struct_type_name)
 
@@ -414,25 +420,12 @@ def push_structs(pack, base_category, progress):
                 iiterator = tqdm(iiterator, leave=False, unit="dep", desc=f"Processing {type_name}")
 
             for dep, variables in iiterator:
-                data_type: StructureDataType | None = None
-                type_candidates = find_data_types(dep)
+                data_type = find_data_type(dep)
 
-                if (candidates := len(type_candidates)) == 0:
+                if data_type is None:
                     logger.debug(f"- Creating empty uncategorized struct {dep} while parsing {type_name}")
 
                     data_type = StructureDataType(uncategorized_category.getCategoryPath(), dep, 0)
-
-                elif candidates == 1:
-                    data_type = type_candidates[0]
-
-                else:
-                    for candidate in type_candidates:
-                        if candidate.sourceArchive.archiveType == ArchiveType.BUILT_IN:
-                            data_type = candidate
-                            break
-
-                    if data_type is None:
-                        logger.error(f"- Failed to resolve data type {dep}")
 
                 for variable in variables:
                     struct["vars"][variable]["type"] = data_type
