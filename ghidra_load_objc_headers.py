@@ -60,6 +60,9 @@ remote_find_data_types = b.remoteify(remote_find_data_types)
 
 
 def find_data_types(type_str):
+    if type_str == "unsigned":
+        type_str = "unsigned int"
+
     return remote_find_data_types(type_str)
 
 
