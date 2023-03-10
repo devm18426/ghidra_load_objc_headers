@@ -64,7 +64,7 @@ def find_data_type(type_str) -> tuple[str, DataType | None]:
     """
     Search Ghidra for data type that corresponds to type_str.
     :param type_str: Name of type
-    :return: Type if found, else None
+    :return: Normalized name of type and type object if found, else None
     """
     if type_str == "unsigned":
         type_str = "unsigned int"
@@ -91,7 +91,6 @@ def parse_pointer(pointer_type: Type) -> tuple[Type | None, str, int]:
     Parses a pointer data type object and extracts the pointee data type. Pointer level is also returned for cases of
     a pointer pointer.
     :param pointer_type: libclang Type object that represents a pointer
-    :param pointer_kind: libclang TypeKind object (should be either TypeKind.POINTER or TypeKind.OBJCOBJECTPOINTER)
     :return: Tuple of pointer clang data type (can be None if pointee cannot be resolved), pointee data type name and
         pointer level
     """
@@ -118,7 +117,7 @@ def parse_pointer(pointer_type: Type) -> tuple[Type | None, str, int]:
                 pointee = None
                 pointee_type_name = protocols[0]
 
-    return pointee, pointee_type_name, level
+    return pointee, pointee_type_name, level  # TODO: Handle if pointee name is None (shouldn't happen)
 
 
 def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[str, DataType | None, int]:
@@ -155,15 +154,13 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
 
             if pointee_type is not None:
                 type_name, variable_type, _ = clang_to_ghidra_type(pointee_type)
-
-                if variable_type is not None:
-                    for i in range(pointer_level):
-                        variable_type = dt_man.getPointer(variable_type)
-
             else:
                 type_name, variable_type = find_data_type(pointee_type_name)
 
-            if variable_type is None:
+            if variable_type is not None:
+                for i in range(pointer_level):
+                    variable_type = dt_man.getPointer(variable_type)
+            else:
                 logger.debug(f"- Could not resolve OBJC pointer type {type_name}")
 
         case TypeKind.CHAR_S:
@@ -340,10 +337,9 @@ def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
                 if field_type is None:
                     logger.debug(f"- Need to resolve field type {type_name}")
                     dependency = dependencies.setdefault(type_name, {
-                        "ptr_level": pointer_level,
-                        "vars": []
+                        pointer_level: [],
                     })
-                    dependency["vars"].append(child.displayname)
+                    dependency[pointer_level].append(child.displayname)
 
                 variables[child.displayname] = {
                     "type_name": type_name,
@@ -392,10 +388,9 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
                     logger.debug(f"- Need to resolve {type_name}")
                     # TODO: Pointer level should be part of key name
                     dependency = dependencies.setdefault(type_name, {
-                        "ptr_level": pointer_level,
-                        "vars": []
+                        pointer_level: [],
                     })
-                    dependency["vars"].append(variable_name)
+                    dependency[pointer_level].append(variable_name)
 
                 variables[variable_name] = {
                     "type_name": type_name,
@@ -467,18 +462,19 @@ def push_structs(pack, base_category, progress):
 
                 if data_type is None:
                     name = dep
-                    if dep_info["ptr_level"] > 0:
-                        name = dep.rstrip("*")
 
                     logger.debug(f"- Creating empty uncategorized struct {name} while parsing {type_name}")
 
                     data_type = StructureDataType(uncategorized_category.getCategoryPath(), name, 0)
 
-                    for i in range(dep_info["ptr_level"]):
-                        data_type = dt_man.getPointer(data_type)
+                for pointer_level, variables in dep_info.items():
+                    pointer_type = data_type
 
-                for variable in dep_info["vars"]:
-                    struct["vars"][variable]["type"] = data_type
+                    for i in range(pointer_level):
+                        pointer_type = dt_man.getPointer(pointer_type)
+
+                    for variable in variables:
+                        struct["vars"][variable]["type"] = pointer_type
 
         # Second pass: Struct population
         iterator = STRUCTS.items()
