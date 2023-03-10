@@ -51,6 +51,18 @@ class GhidraTransaction:
 STRUCTS: dict[str, dict] = {}
 
 
+def normalize_data_type_name(type_str):
+    if type_str == "unsigned":
+        type_str = "unsigned int"
+
+    else:
+        type_str = type_str.removeprefix("const ")
+        type_str = type_str.removeprefix("_Atomic(").removesuffix(")")
+        type_str = type_str.removeprefix("struct ")
+
+    return type_str
+
+
 def remote_find_data_types(type_str):
     candidates = []
     currentProgram.getDataTypeManager().findDataTypes(type_str, candidates)
@@ -66,14 +78,7 @@ def find_data_type(type_str) -> tuple[str, DataType | None]:
     :param type_str: Name of type
     :return: Normalized name of type and type object if found, else None
     """
-    if type_str == "unsigned":
-        type_str = "unsigned int"
-
-    else:
-        type_str = type_str.removeprefix("const ")
-        type_str = type_str.removeprefix("_Atomic(").removesuffix(")")
-        type_str = type_str.removeprefix("struct ")
-
+    type_str = normalize_data_type_name(type_str)
     type_candidates = remote_find_data_types(type_str)
 
     if len(type_candidates) == 1:
@@ -97,18 +102,17 @@ def parse_pointer(pointer_type: Type) -> tuple[Type | None, str, int]:
     level = 1
     pointer_kind = pointer_type.kind
     pointee = pointer_type
+    pointee_type_name = pointee.spelling
     try:
         while (pointee := pointee.get_pointee()).kind == pointer_kind:
             level += 1
-
-        pointee_type_name = pointee.spelling
 
     except ValueError as e:
         # TODO: Probably caused by protocol type
         logger.warning(f"Couldn't resolve pointee kind: {e} (possible libclang issue). "
                        f"Assuming pointee is not a pointer")
 
-        match = re.match(r"(?P<type_name>.+?)<(?P<protocols>.+?)>", pointee.spelling)
+        match = re.match(r"(?P<type_name>.+?)<(?P<protocols>.+?)>", pointee_type_name)
         if match is not None:
             match = match.groupdict()
             pointee_type_name = match.get("type_name")
@@ -143,10 +147,11 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
 
                 if len(protocols) == 1:
                     type_name = protocols[0]
-
-            return find_data_type(type_name)
         else:
-            logger.warning(f"- Could not parse type name and protocols using RegEx")
+            logger.warning(f"- Could not parse type name ({data_type.spelling}) and protocols using RegEx")
+
+        type_name, variable_type = find_data_type(type_name)
+        return type_name, variable_type, 0
 
     match data_type.kind:
         case TypeKind.OBJCOBJECTPOINTER:
@@ -201,12 +206,7 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
             )
 
         case TypeKind.ATOMIC:
-            atomic_tokens = var_cursor.get_tokens()
-
-            next(atomic_tokens, None)  # Should be TokenKind.KEYWORD, spelling="_Atomic"
-            id_token = next(atomic_tokens, None)
-            if id_token and id_token.kind in (TokenKind.IDENTIFIER, TokenKind.KEYWORD):
-                type_name = id_token.spelling
+            type_name = normalize_data_type_name(type_name)
 
             type_name, variable_type = find_data_type(type_name)
             if variable_type is None:
@@ -233,7 +233,8 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
                                 pointer_level += 1
 
             else:
-                type_name, variable_type = find_data_type(pointee_type_name)
+                if pointee_type is not None:
+                    type_name, variable_type, _ = clang_to_ghidra_type(pointee_type)
 
             if variable_type is not None:
                 for i in range(pointer_level):
@@ -386,7 +387,6 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
 
                 if variable_type is None:
                     logger.debug(f"- Need to resolve {type_name}")
-                    # TODO: Pointer level should be part of key name
                     dependency = dependencies.setdefault(type_name, {
                         pointer_level: [],
                     })
@@ -434,7 +434,7 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
                 logger.warning(f"Unsupported cursor kind {other}")
 
 
-def push_structs(pack, base_category, progress):
+def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: bool):
     if len(STRUCTS) == 0:
         logger.info("No structs to push")
         return
@@ -484,80 +484,82 @@ def push_structs(pack, base_category, progress):
         for type_name, struct in iterator:
             data_type = struct["type"]
 
-            data_type.deleteAll()
+            if not skip_vars:
+                data_type.deleteAll()
 
-            iiterator = OrderedDict(reversed(list(struct["vars"].items()))).items()
-            if progress:
-                iiterator = tqdm(iiterator, unit="var", leave=False, desc=f"Pushing variables ({type_name})")
+                iiterator = OrderedDict(reversed(list(struct["vars"].items()))).items()
+                if progress:
+                    iiterator = tqdm(iiterator, unit="var", leave=False, desc=f"Pushing variables ({type_name})")
 
-            # Push variables
-            for variable_name, var in iiterator:
-                data_type.insertAtOffset(0, var["type"], var["type"].length, variable_name, "")
+                # Push variables
+                for variable_name, var in iiterator:
+                    data_type.insertAtOffset(0, var["type"], var["type"].length, variable_name, "")
 
-            if pack:
-                data_type.setToDefaultPacking()
+                if pack:
+                    data_type.setToDefaultPacking()
 
-            # Push methods
-            namespace = sym_table.getNamespace(type_name, None)
-            if namespace is None:
-                logger.debug(f"Couldn't find symbol {type_name}. Skipping method pushing")
-                continue
+            if not skip_methods:
+                # Push methods
+                namespace = sym_table.getNamespace(type_name, None)
+                if namespace is None:
+                    logger.debug(f"Couldn't find symbol {type_name}. Skipping method pushing")
+                    continue
 
-            iiterator = struct.get("methods").items()
-            if progress:
-                iiterator = tqdm(iiterator, leave=False, unit="method", desc=f"Pushing methods ({type_name})")
+                iiterator = struct.get("methods").items()
+                if progress:
+                    iiterator = tqdm(iiterator, leave=False, unit="method", desc=f"Pushing methods ({type_name})")
 
-            symbols = sym_table.getSymbols(namespace)
-            # TODO: Speed this up
-            symbols = {
-                symbol.getName(): symbol
-                for symbol in filter(lambda symbol: symbol.getSymbolType() == SymbolType.FUNCTION, symbols)
-            }
+                symbols = sym_table.getSymbols(namespace)
+                # TODO: Speed this up
+                symbols = {
+                    symbol.getName(): symbol
+                    for symbol in filter(lambda symbol: symbol.getSymbolType() == SymbolType.FUNCTION, symbols)
+                }
 
-            for method_name, method in iiterator:
+                for method_name, method in iiterator:
 
-                if symbol := symbols.get(method_name):
-                    params = []
+                    if symbol := symbols.get(method_name):
+                        params = []
 
-                    for param_name, param in method["params"].items():
-                        _, param_type = find_data_type(param["type"])
+                        for param_name, param in method["params"].items():
+                            _, param_type = find_data_type(param["type"])
 
-                        if param_type is not None:
-                            params.append(ParameterImpl(
-                                param_name,
-                                param_type,
-                                prog,
-                            ))
+                            if param_type is not None:
+                                params.append(ParameterImpl(
+                                    param_name,
+                                    param_type,
+                                    prog,
+                                ))
 
-                    # TODO: Fix pointers in return type
-                    # name = dep
-                    # if dep_info["ptr_level"] > 0:
-                    #     name = type_name.rstrip("*")
-                    #
-                    # logger.debug(f"- Creating empty uncategorized struct {name} while parsing {type_name}")
-                    #
-                    # data_type = StructureDataType(uncategorized_category.getCategoryPath(), name, 0)
-                    #
-                    # for i in range(dep_info["ptr_level"]):
-                    #     data_type = dt_man.getPointer(data_type)
+                        # TODO: Fix pointers in return type
+                        # name = dep
+                        # if dep_info["ptr_level"] > 0:
+                        #     name = type_name.rstrip("*")
+                        #
+                        # logger.debug(f"- Creating empty uncategorized struct {name} while parsing {type_name}")
+                        #
+                        # data_type = StructureDataType(uncategorized_category.getCategoryPath(), name, 0)
+                        #
+                        # for i in range(dep_info["ptr_level"]):
+                        #     data_type = dt_man.getPointer(data_type)
 
-                    _, return_type = find_data_type(method["rtype"])
-                    if return_type is None:
-                        logger.error(f"- Failed to resolve return data type {method['rtype']}")
+                        _, return_type = find_data_type(method["rtype"])
+                        if return_type is None:
+                            logger.error(f"- Failed to resolve return data type {method['rtype']}")
 
-                    else:
-                        for i in range(method["rtype_ptr_level"]):
-                            return_type = dt_man.getPointer(return_type)
+                        else:
+                            for i in range(method["rtype_ptr_level"]):
+                                return_type = dt_man.getPointer(return_type)
 
-                    func = func_man.getFunction(symbol.getID())
-                    func.updateFunction(
-                        THISCALL,
-                        ReturnParameterImpl(return_type, prog),
-                        params,
-                        Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
-                        False,
-                        SourceType.USER_DEFINED,
-                    )
+                        func = func_man.getFunction(symbol.getID())
+                        func.updateFunction(
+                            THISCALL,
+                            ReturnParameterImpl(return_type, prog),
+                            params,
+                            Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+                            False,
+                            SourceType.USER_DEFINED,
+                        )
 
     logger.info("Done")
 
@@ -600,7 +602,7 @@ def main(headers: Iterator, pack: bool, progress: bool, skip_vars: bool, skip_me
                     logger.info(f"Parsing interface {type_name}")
                     parse_interface(child, category, pack, skip_vars=skip_vars, skip_methods=skip_methods)
 
-    push_structs(pack, base_category, progress)
+    push_structs(pack, base_category, progress, skip_vars, skip_methods)
 
 
 if __name__ == "__main__":
