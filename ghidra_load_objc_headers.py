@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import faulthandler
 import logging
 import re
 import sys
@@ -85,38 +86,83 @@ def find_data_type(type_str) -> tuple[str, DataType | None]:
     return type_str, None
 
 
-def parse_pointer(data_type: Type, pointer_kind: TypeKind) -> tuple[str, DataType | None]:
+def parse_pointer(pointer_type: Type) -> tuple[Type | None, str, int]:
+    """
+    Parses a pointer data type object and extracts the pointee data type. Pointer level is also returned for cases of
+    a pointer pointer.
+    :param pointer_type: libclang Type object that represents a pointer
+    :param pointer_kind: libclang TypeKind object (should be either TypeKind.POINTER or TypeKind.OBJCOBJECTPOINTER)
+    :return: Tuple of pointer clang data type (can be None if pointee cannot be resolved), pointee data type name and
+        pointer level
+    """
     level = 1
-    pointee = data_type
+    pointer_kind = pointer_type.kind
+    pointee = pointer_type
     try:
         while (pointee := pointee.get_pointee()).kind == pointer_kind:
             level += 1
 
-        type_name = pointee.spelling
+        pointee_type_name = pointee.spelling
 
     except ValueError as e:
         # TODO: Probably caused by protocol type
         logger.warning(f"Couldn't resolve pointee kind: {e} (possible libclang issue). "
                        f"Assuming pointee is not a pointer")
 
-        match = re.match(r"(?P<type_name>.+?)<.+?>", pointee.spelling)
-        type_name = match.groupdict().get("type_name")
+        match = re.match(r"(?P<type_name>.+?)<(?P<protocols>.+?)>", pointee.spelling)
+        if match is not None:
+            match = match.groupdict()
+            pointee_type_name = match.get("type_name")
+            protocols = match.get("protocols").split(", ")
+            if pointee_type_name == "id" and len(protocols) == 1:
+                pointee = None
+                pointee_type_name = protocols[0]
 
-    type_name, variable_type = find_data_type(type_name)
-    if variable_type is not None:
-        for i in range(level):
-            variable_type = dt_man.getPointer(variable_type)
-
-    return type_name, variable_type
+    return pointee, pointee_type_name, level
 
 
-def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[str, DataType | None]:
+def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[str, DataType | None, int]:
     variable_type: DataType | None
     type_name: str = data_type.spelling
+    pointer_level = 0
+
+    try:
+        data_type.kind
+    except ValueError as e:
+        # TODO: Probably caused by protocol type
+        # TODO: If data type is id<Type>, consider returning Type* instead of id
+
+        logger.warning(f"- Could not process data type kind: {e} (possible libclang issue)")
+
+        match = re.match(r"(?P<type_name>.+?)<(?P<protocols>.+?)>", data_type.spelling)
+        if match is not None:
+            match = match.groupdict()
+            type_name = match.get("type_name")
+
+            if type_name == "id" and (protocols := match.get("protocols")):
+                protocols = protocols.split(", ")
+
+                if len(protocols) == 1:
+                    type_name = protocols[0]
+
+            return find_data_type(type_name)
+        else:
+            logger.warning(f"- Could not parse type name and protocols using RegEx")
 
     match data_type.kind:
         case TypeKind.OBJCOBJECTPOINTER:
-            type_name, variable_type = parse_pointer(data_type, TypeKind.OBJCOBJECTPOINTER)
+            pointee_type, pointee_type_name, pointer_level = parse_pointer(data_type)
+
+            if pointee_type is not None:
+                type_name, variable_type, _ = clang_to_ghidra_type(pointee_type)
+
+                if variable_type is not None:
+                    for i in range(pointer_level):
+                        variable_type = dt_man.getPointer(variable_type)
+
+            else:
+                type_name, variable_type = find_data_type(pointee_type_name)
+
             if variable_type is None:
                 logger.debug(f"- Could not resolve OBJC pointer type {type_name}")
 
@@ -149,7 +195,7 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
 
         case TypeKind.CONSTANTARRAY:
             element_type = data_type.get_array_element_type()
-            element_type_name, ghidra_element_type = clang_to_ghidra_type(element_type)
+            element_type_name, ghidra_element_type, _ = clang_to_ghidra_type(element_type)  # TODO: Array of pointers?
 
             variable_type = ArrayDataType(
                 ghidra_element_type,
@@ -170,7 +216,11 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
                 logger.error(f"- Failed to resolve atomic data type {type_name}")
 
         case TypeKind.POINTER:
+            variable_type = None
+            pointee_type, pointee_type_name, pointer_level = parse_pointer(data_type)
+
             if "unnamed struct" in type_name:
+                # libclang can't parse this struct properly for some reason, parse manually
                 struct_decl_tokens = var_cursor.get_tokens()
 
                 if (struct_keyword := next(struct_decl_tokens, None)) and struct_keyword.kind == TokenKind.KEYWORD and \
@@ -178,9 +228,21 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
 
                     if (id_token := next(struct_decl_tokens, None)) and id_token.kind == TokenKind.IDENTIFIER:
                         type_name = id_token.spelling
+                        pointee_type_name, variable_type = find_data_type(type_name)
 
-            type_name, variable_type = parse_pointer(data_type, TypeKind.POINTER)
-            if variable_type is None:
+                        pointer_level = 0
+                        for token in struct_decl_tokens:
+                            if token.kind == TokenKind.PUNCTUATION and token.spelling == "*":
+                                pointer_level += 1
+
+            else:
+                type_name, variable_type = find_data_type(pointee_type_name)
+
+            if variable_type is not None:
+                for i in range(pointer_level):
+                    variable_type = dt_man.getPointer(variable_type)
+
+            else:
                 logger.debug(f"- Could not resolve pointer type {type_name}")
 
         case TypeKind.ELABORATED:
@@ -205,14 +267,13 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
             if variable_type is None:
                 logger.error(f"- Failed to resolve data type {type_name}")
 
-    return type_name, variable_type
+    return type_name, variable_type, pointer_level
 
 
-def parse_instance_variable(var_cursor: Cursor = None) ->\
-        tuple[str, typing.Optional[DataType], str]:
+def parse_instance_variable(var_cursor: Cursor = None) -> tuple[str, typing.Optional[DataType], str, int]:
     var_name = var_cursor.displayname
 
-    type_name, variable_type = clang_to_ghidra_type(var_cursor.type, var_cursor)
+    type_name, variable_type, pointer_level = clang_to_ghidra_type(var_cursor.type, var_cursor)
 
     if var_name == "" and var_cursor is not None:
         # TODO: Probably related to type protocol declaration
@@ -223,14 +284,14 @@ def parse_instance_variable(var_cursor: Cursor = None) ->\
 
         var_name = f"MISSING_PTR_NAME_{var_cursor.hash}"
 
-    return type_name, variable_type, var_name
+    return type_name, variable_type, var_name, pointer_level
 
 
 def parse_method(methods: dict[str, dict], method_cursor: Cursor):
     method_name = method_cursor.displayname
     method = methods.setdefault(method_name, {})
-    method["rtype"] = method_cursor.result_type.spelling
-    method["rtype_pointer"] = method_cursor.result_type.kind == TypeKind.POINTER
+    method["rtype_ptr_level"] = method_cursor.result_type.spelling.count("*")
+    method["rtype"] = method_cursor.result_type.spelling.rstrip("* ")
     params = method.setdefault("params", {})
 
     for arg in method_cursor.get_arguments():
@@ -275,11 +336,11 @@ def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
     for child in struct_cursor.get_children():
         match child.kind:
             case CursorKind.FIELD_DECL:
-                type_name, field_type = clang_to_ghidra_type(child.type, child)
+                type_name, field_type, pointer_level = clang_to_ghidra_type(child.type, child)
                 if field_type is None:
                     logger.debug(f"- Need to resolve field type {type_name}")
                     dependency = dependencies.setdefault(type_name, {
-                        "ptr_level": type_name.count("*"),  # TODO: Revisit
+                        "ptr_level": pointer_level,
                         "vars": []
                     })
                     dependency["vars"].append(child.displayname)
@@ -325,13 +386,13 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
                     continue
 
                 logger.debug(f"Parsing var {instance_cursor.displayname}")
-                type_name, variable_type, variable_name = \
-                    parse_instance_variable(instance_cursor)
+                type_name, variable_type, variable_name, pointer_level = parse_instance_variable(instance_cursor)
 
                 if variable_type is None:
                     logger.debug(f"- Need to resolve {type_name}")
+                    # TODO: Pointer level should be part of key name
                     dependency = dependencies.setdefault(type_name, {
-                        "ptr_level": type_name.count("*"),
+                        "ptr_level": pointer_level,
                         "vars": []
                     })
                     dependency["vars"].append(variable_name)
@@ -407,7 +468,7 @@ def push_structs(pack, base_category, progress):
                 if data_type is None:
                     name = dep
                     if dep_info["ptr_level"] > 0:
-                        name = type_name.rstrip("*")
+                        name = dep.rstrip("*")
 
                     logger.debug(f"- Creating empty uncategorized struct {name} while parsing {type_name}")
 
@@ -472,12 +533,24 @@ def push_structs(pack, base_category, progress):
                                 prog,
                             ))
 
+                    # TODO: Fix pointers in return type
+                    # name = dep
+                    # if dep_info["ptr_level"] > 0:
+                    #     name = type_name.rstrip("*")
+                    #
+                    # logger.debug(f"- Creating empty uncategorized struct {name} while parsing {type_name}")
+                    #
+                    # data_type = StructureDataType(uncategorized_category.getCategoryPath(), name, 0)
+                    #
+                    # for i in range(dep_info["ptr_level"]):
+                    #     data_type = dt_man.getPointer(data_type)
+
                     _, return_type = find_data_type(method["rtype"])
                     if return_type is None:
                         logger.error(f"- Failed to resolve return data type {method['rtype']}")
 
                     else:
-                        if method["rtype_pointer"]:
+                        for i in range(method["rtype_ptr_level"]):
                             return_type = dt_man.getPointer(return_type)
 
                     func = func_man.getFunction(symbol.getID())
@@ -596,6 +669,8 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args().__dict__
+
+    faulthandler.enable()
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("[%(levelname)-7s] %(message)s"))
