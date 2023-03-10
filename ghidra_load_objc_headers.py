@@ -110,7 +110,7 @@ def parse_pointer(data_type: Type, pointer_kind: TypeKind) -> tuple[str, DataTyp
     return type_name, variable_type
 
 
-def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None):
+def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[str, DataType | None]:
     variable_type: DataType | None
     type_name: str = data_type.spelling
 
@@ -275,7 +275,7 @@ def parse_struct(struct_cursor: Cursor, category: Category, pack: bool):
     for child in struct_cursor.get_children():
         match child.kind:
             case CursorKind.FIELD_DECL:
-                type_name, field_type = find_data_type(child.type.spelling)
+                type_name, field_type = clang_to_ghidra_type(child.type, child)
                 if field_type is None:
                     logger.debug(f"- Need to resolve field type {type_name}")
                     dependency = dependencies.setdefault(type_name, {
