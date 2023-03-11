@@ -52,13 +52,15 @@ STRUCTS: dict[str, dict] = {}
 
 
 def normalize_data_type_name(type_str):
+    type_str = type_str.removeprefix("const ")
+    type_str = type_str.removeprefix("_Atomic(").removesuffix(")")
+    type_str = type_str.removeprefix("struct ")
+
     if type_str == "unsigned":
         type_str = "unsigned int"
 
-    else:
-        type_str = type_str.removeprefix("const ")
-        type_str = type_str.removeprefix("_Atomic(").removesuffix(")")
-        type_str = type_str.removeprefix("struct ")
+    if type_str == "id":
+        type_str = "ID"
 
     return type_str
 
@@ -242,6 +244,9 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
             else:
                 logger.debug(f"- Could not resolve pointer type {type_name}")
 
+        case TypeKind.OBJCID:
+            _, variable_type = find_data_type("ID")
+
         case TypeKind.ELABORATED:
             # Inline struct declaration, etc.
 
@@ -287,8 +292,10 @@ def parse_instance_variable(var_cursor: Cursor = None) -> tuple[str, typing.Opti
 def parse_method(methods: dict[str, dict], method_cursor: Cursor):
     method_name = method_cursor.displayname
     method = methods.setdefault(method_name, {})
-    method["rtype_ptr_level"] = method_cursor.result_type.spelling.count("*")
-    method["rtype"] = method_cursor.result_type.spelling.rstrip("* ")
+    rtype_name, rtype, rtype_pointer_level = clang_to_ghidra_type(method_cursor.result_type, method_cursor)
+    method["rtype"] = rtype
+    method["rtype_name"] = rtype_name
+    method["rtype_ptr_level"] = rtype_pointer_level
     params = method.setdefault("params", {})
 
     for arg in method_cursor.get_arguments():
@@ -523,13 +530,16 @@ def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: b
                                     prog,
                                 ))
 
-                        _, return_type = find_data_type(method["rtype"])
+                        return_type = method["rtype"]
                         if return_type is None:
-                            logger.error(f"- Failed to resolve return data type {method['rtype']}")
+                            _, return_type = find_data_type(method["rtype_name"])
 
-                        else:
-                            for i in range(method["rtype_ptr_level"]):
-                                return_type = dt_man.getPointer(return_type)
+                            if return_type is None:
+                                logger.error(f"- Failed to resolve return data type {method['rtype']}")
+
+                            else:
+                                for i in range(method["rtype_ptr_level"]):
+                                    return_type = dt_man.getPointer(return_type)
 
                         func = func_man.getFunction(symbol.getID())
                         func.updateFunction(
@@ -688,4 +698,5 @@ if __name__ == "__main__":
     except BaseException as e:
         message = f": {e}" if str(e) else ""
         logger.error(f"Caught {type(e).__name__}{message}")
+        logger.error(e, exc_info=True)
         logger.error("Quitting...")
