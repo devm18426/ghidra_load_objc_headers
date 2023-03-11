@@ -389,7 +389,7 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
                     dependency = dependencies.setdefault(type_name, {
                         pointer_level: [],
                     })
-                    dependency[pointer_level].append(variable_name)
+                    dependency.setdefault(pointer_level, []).append(variable_name)
 
                 variables[variable_name] = {
                     "type_name": type_name,
