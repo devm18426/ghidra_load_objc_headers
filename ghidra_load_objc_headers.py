@@ -402,7 +402,7 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
                     logger.debug(f"Skipping method {instance_cursor.displayname}")
                     continue
 
-                logger.debug(f"{instance_cursor.kind} {instance_cursor.displayname}")
+                logger.debug(f"Parsing method {instance_cursor.displayname}")
 
                 parse_method(methods, instance_cursor)
 
@@ -509,16 +509,9 @@ def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: b
                 if progress:
                     iiterator = tqdm(iiterator, leave=False, unit="method", desc=f"Pushing methods ({type_name})")
 
-                symbols = sym_table.getSymbols(namespace)
-                # TODO: Speed this up
-                symbols = {
-                    symbol.getName(): symbol
-                    for symbol in filter(lambda symbol: symbol.getSymbolType() == SymbolType.FUNCTION, symbols)
-                }
-
-                for method_name, method in iiterator:
-
-                    if symbol := symbols.get(method_name):
+                symbols = sym_table.getSymbols(namespace.getBody(), SymbolType.FUNCTION, True)
+                for symbol in symbols:
+                    if method := struct.get("methods").get(symbol.name):
                         params = []
 
                         for param_name, param in method["params"].items():
@@ -560,6 +553,12 @@ def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: b
                             False,
                             SourceType.USER_DEFINED,
                         )
+
+                    if progress:
+                        iiterator.update()
+
+                if progress:
+                    iiterator.close()
 
     logger.info("Done")
 
