@@ -121,7 +121,7 @@ def parse_pointer(pointer_type: Type) -> tuple[Type | None, str, int]:
                 pointee = None
                 pointee_type_name = protocols[0]
 
-    return pointee, pointee_type_name, level  # TODO: Handle if pointee name is None (shouldn't happen)
+    return pointee, pointee_type_name, level
 
 
 def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[str, DataType | None, int]:
@@ -133,7 +133,6 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
         data_type.kind
     except ValueError as e:
         # TODO: Probably caused by protocol type
-        # TODO: If data type is id<Type>, consider returning Type* instead of id
 
         logger.warning(f"- Could not process data type kind: {e} (possible libclang issue)")
 
@@ -523,18 +522,6 @@ def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: b
                                     param_type,
                                     prog,
                                 ))
-
-                        # TODO: Fix pointers in return type
-                        # name = dep
-                        # if dep_info["ptr_level"] > 0:
-                        #     name = type_name.rstrip("*")
-                        #
-                        # logger.debug(f"- Creating empty uncategorized struct {name} while parsing {type_name}")
-                        #
-                        # data_type = StructureDataType(uncategorized_category.getCategoryPath(), name, 0)
-                        #
-                        # for i in range(dep_info["ptr_level"]):
-                        #     data_type = dt_man.getPointer(data_type)
 
                         _, return_type = find_data_type(method["rtype"])
                         if return_type is None:
