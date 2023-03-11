@@ -42,7 +42,7 @@ class GhidraTransaction:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
-            logging.debug(f"Caught {exc_type} during transaction. Aborting. ({exc_val})")
+            logger.debug(f"Caught {exc_type} during transaction. Aborting. ({exc_val})")
             end(False)
         else:
             end(True)
@@ -678,9 +678,14 @@ if __name__ == "__main__":
     func_man = prog.getFunctionManager()
     func_tag_man = func_man.getFunctionTagManager()
 
-    if args["progress"]:
-        with logging_redirect_tqdm(loggers=[logger]):
-            main(**args)
+    try:
+        if args["progress"]:
+            with logging_redirect_tqdm(loggers=[logger]):
+                main(**args)
 
-    else:
-        main(**args)
+        else:
+            main(**args)
+    except BaseException as e:
+        message = f": {e}" if str(e) else ""
+        logger.error(f"Caught {type(e).__name__}{message}")
+        logger.error("Quitting...")
