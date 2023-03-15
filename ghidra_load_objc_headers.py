@@ -447,6 +447,8 @@ def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: b
 
     logger.info(f"Pushing {len(STRUCTS)} structs")
 
+    _, class_type, = find_data_type("Class")
+
     with GhidraTransaction():
         # Unknown types should go in an "uncategorized" category
         category_path = CategoryPath(f"/{base_category}/___MISSING_TYPES")
@@ -503,6 +505,8 @@ def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: b
 
                 if pack:
                     data_type.setToDefaultPacking()
+
+            data_type.insertAtOffset(0, class_type, class_type.length, "isa", "")
 
             if not skip_methods:
                 # Push methods
