@@ -4,7 +4,7 @@ Rough script to load Objective-C header data into Ghidra.
 The Objective-C headers are parsed using the [clang python bindings](https://github.com/llvm/llvm-project/tree/main/clang/bindings/python) and relevant data is inserted into the Ghidra database.
 
 Currently supports the following data:
-* Identified interfaces are defined as structs, with their fields set accordingly (names and types)
+* Identified interfaces are defined as structs, with their fields set accordingly (names and types).
 * Instance method parameters (names and types) are set as well. `__thiscall` convention will be set.
 
 The loading process happens in 3 stages:
@@ -54,6 +54,7 @@ options:
   --skip-methods        Enable skipping of class method parsing (Default: Disabled)
   -c BASE_CATEGORY, --base-category BASE_CATEGORY
                         Base category path for all loaded types (Default: objc_loader)
+  --no-isa              Disable adding of the isa field to parsed structs (Default: Enabled)
   ```
   
 ## Known Issues

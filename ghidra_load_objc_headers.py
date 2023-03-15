@@ -440,7 +440,7 @@ def parse_interface(cursor: Cursor, category: Category, pack: bool, skip_vars=Fa
                 logger.warning(f"Unsupported cursor kind {other}")
 
 
-def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: bool):
+def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: bool, isa: bool):
     if len(STRUCTS) == 0:
         logger.info("No structs to push")
         return
@@ -506,7 +506,8 @@ def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: b
                 if pack:
                     data_type.setToDefaultPacking()
 
-            data_type.insertAtOffset(0, class_type, class_type.length, "isa", "")
+            if isa:
+                data_type.insertAtOffset(0, class_type, class_type.length, "isa", "")
 
             if not skip_methods:
                 # Push methods
@@ -564,7 +565,15 @@ def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: b
     logger.info("Done")
 
 
-def main(headers: Iterator, pack: bool, progress: bool, skip_vars: bool, skip_methods: bool, base_category: str):
+def main(
+        headers: Iterator,
+        pack: bool,
+        progress: bool,
+        skip_vars: bool,
+        skip_methods: bool,
+        base_category: str,
+        isa: bool
+):
     iterator = list(headers)
 
     if len(iterator) == 0:
@@ -602,7 +611,7 @@ def main(headers: Iterator, pack: bool, progress: bool, skip_vars: bool, skip_me
                     logger.info(f"Parsing interface {type_name}")
                     parse_interface(child, category, pack, skip_vars=skip_vars, skip_methods=skip_methods)
 
-    push_structs(pack, base_category, progress, skip_vars, skip_methods)
+    push_structs(pack, base_category, progress, skip_vars, skip_methods, isa)
 
 
 if __name__ == "__main__":
@@ -664,6 +673,13 @@ if __name__ == "__main__":
         default=(default := "objc_loader"),
         dest="base_category",
         help=f"Base category path for all loaded types (Default: {default})",
+    )
+    parser.add_argument(
+        "--no-isa",
+        action="store_false",
+        default=True,
+        dest="isa",
+        help="Disable adding of the isa field to parsed structs (Default: Enabled)"
     )
 
     args = parser.parse_args().__dict__
