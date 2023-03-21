@@ -14,6 +14,8 @@ The loading process happens in 3 stages:
 
 The parsed data is pushed over a bridge implemented with [`ghidra-bridge`](https://github.com/justfoxing/ghidra_bridge) so it may be run in any Python 3 interpreter, however requires the Python 2 server be running within Ghidra.
 
+NOTE: For best results make sure to load Objective-C data types into the code browser before running this script. The [IDAObjcTypes](https://github.com/PoomSmart/IDAObjcTypes) is highly recommended.
+
 ## Usage
 
 * `pip install -r requirements.txt` or `pipenv install -r requirements.txt`
