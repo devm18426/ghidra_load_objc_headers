@@ -27,7 +27,7 @@ else:
 from ghidra.program.database.data import StructureDB
 from ghidra.program.model.data import StructureDataType, DataType, CategoryPath, DataTypeConflictHandler, Category, \
     CharDataType, ArchiveType, IntegerDataType, UnsignedIntegerDataType, ShortDataType, UnsignedLongLongDataType, \
-    UnsignedShortDataType, LongDataType, UnsignedLongDataType, LongLongDataType, ArrayDataType
+    UnsignedShortDataType, LongDataType, UnsignedLongDataType, LongLongDataType, ArrayDataType, UnsignedCharDataType
 from ghidra.program.model.symbol import SymbolType, SourceType
 from ghidra.program.model.listing import Function, ParameterImpl, ReturnParameterImpl
 
@@ -172,6 +172,9 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
         case TypeKind.CHAR_S:
             variable_type = CharDataType()
 
+        case TypeKind.UCHAR:
+            variable_type = UnsignedCharDataType()
+
         case TypeKind.INT:
             variable_type = IntegerDataType()
 
@@ -211,7 +214,7 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
 
             type_name, variable_type = find_data_type(type_name)
             if variable_type is None:
-                logger.error(f"- Failed to resolve atomic data type {type_name}")
+                logger.warning(f"- Failed to resolve atomic data type {type_name}")
 
         case TypeKind.POINTER:
             variable_type = None
@@ -260,14 +263,14 @@ def clang_to_ghidra_type(data_type: Type, var_cursor: Cursor = None) -> tuple[st
 
             type_name, variable_type = find_data_type(type_name)
             if variable_type is None:
-                logger.error(f"- Failed to resolve data type {type_name}")
+                logger.warning(f"- Failed to resolve data type {type_name}")
 
         case other:
             logger.debug(f"- Got unhandled type kind {other}")
 
             type_name, variable_type = find_data_type(type_name)
             if variable_type is None:
-                logger.error(f"- Failed to resolve data type {type_name}")
+                logger.warning(f"- Failed to resolve data type {type_name}")
 
     return type_name, variable_type, pointer_level
 
@@ -279,8 +282,8 @@ def parse_instance_variable(var_cursor: Cursor = None) -> tuple[str, typing.Opti
 
     if var_name == "" and var_cursor is not None:
         # TODO: Probably related to type protocol declaration
-        logger.error(f"- Missing pointer variable name (possible libclang issue). Returning placeholder")
-        logger.error(
+        logger.warning(f"- Missing pointer variable name (possible libclang issue). Returning placeholder")
+        logger.warning(
             f"- {var_cursor.location.file.name}:{var_cursor.location.line}:{var_cursor.location.column}"
         )
 
@@ -540,7 +543,8 @@ def push_structs(pack, base_category, progress, skip_vars: bool, skip_methods: b
                             _, return_type = find_data_type(method["rtype_name"])
 
                             if return_type is None:
-                                logger.error(f"- Failed to resolve return data type {method['rtype']}")
+                                logger.error(f"{type_name}::{symbol.name}")
+                                logger.error(f"- Failed to resolve return data type {method['rtype_name']}")
 
                             else:
                                 for i in range(method["rtype_ptr_level"]):
